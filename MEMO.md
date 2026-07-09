@@ -121,8 +121,40 @@
 杂项备忘：
 - 隔离试跑用 `CC_SWITCH_TEST_HOME`（`config.rs:23` 专为 CI/本地隔离真实数据而设）
 - brew 原版 cc-switch 仍常驻后台共用 `~/.cc-switch`（实测 16:43 又写了一次）——
-  本 fork 测试一律走隔离目录，不碰真实库
-- 工作树当前未提交改动 = 本次「302 默认化」全部 + 本 MEMO 更新
+  本 fork 已于晚间改用独立目录 `~/.302-cc-switch`，与它彻底无关
+
+### ✅ 已完成：数据目录独立 + 302 产品化（2026-07-09 晚间实装）
+
+四个 commit，全部已在本机装机人工验收：
+
+1. **数据目录独立**（`00ffb059`）：`~/.cc-switch` → `~/.302-cc-switch`，全仓 64 文件机械替换
+   + 三处人工修正。**刻意不迁移旧数据**（旧目录归原版 app 所有）。WebDAV/S3 默认远端根同步改
+   `302-cc-switch-sync`（防止与原版同步互相覆盖）；删掉上游 v3.10.3 的 Windows HOME 回退死代码。
+   已用 lsof 实测双 app 同跑各写各库
+2. **图标修复**（`ceb9a371`）：ai302 是 PNG，原来登记在 `icons`（内联 SVG map）导致 URL 被当
+   SVG 文本渲染成乱码，移到 `iconUrls` 走 `<img>`
+3. **302 产品化**（`63afe28f`）：
+   - 302 种子不可删除：后端 `is_ai302_seed_id` 在 `ProviderService::delete` 入口拦截，
+     前端 `isProtected` 禁用删除按钮（`ProviderCard` 按 id 前缀 `ai302-` 判定）
+   - 精简 key 弹窗 `Ai302KeyDialog`：App.tsx 里 id 为 `ai302-*` 时替换 `EditProviderDialog`；
+     只填 key（按 app 落到 ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY）
+   - Claude 官方登录识别：live 导入时 env 无 BASE_URL/API_KEY/AUTH_TOKEN → 跳过 "default"
+     落库，种子就位后把 claude-official 设为 current（镜像 Codex 的 has_login_material 逻辑）
+   - 新增集成测试 2 个（官方识别跳过导入 / 302 删除被拒）
+4. **key 验证 + 弹窗美化**（`da26ec63`）：「验证 Key」按钮打 `/v1/models`（复用
+   `fetch_models_for_config`，走配置里实际生效的 base_url，兼容国内镜像域名）；
+   401/403 → Key 无效，其余 → 网络问题（已用假 key 实测 302 返回 401）。
+   布局按 app 弹窗规范（body `px-6 py-5`），key 输入复用 `ApiKeyInput`
+
+设计决策：302 官方预设卡保持「只填 key 零配置」；想改模型（如 sonnet 换 GLM）的用户
+用「复制」出副本卡走完整表单——副本 id 非 `ai302-*`，自动脱离保护与精简弹窗。
+
+待办新增（除 MEMO 既有项外）：
+- [ ] 领 key 链接暂定 `https://dash.302.ai/apis/list`（`src/config/ai302.ts`），待主理人确认
+- [ ] 「自动领取 key」等 302 平台接口文档
+- [ ] 精简弹窗加「模型方案」下拉（验证时已拿到模型清单，可直接复用）——主理人未拍板
+- [ ] 真 key 全链路：验证 → 切换 → 实跑一次 Claude Code（确认 302 认识 CC 报的模型名）
+- [ ] 主理人本机的历史 "default" 卡片需手动清理（切到 Claude Official 后删除）
 
 ### 刻意保留的灰色地带
 
@@ -237,9 +269,48 @@ TODOs, not regressions from this batch):
   preset's API_KEY style → also pending real-key verification.
 
 Misc: isolated runs use `CC_SWITCH_TEST_HOME` (`config.rs:23`, purpose-built for CI/local
-data isolation). The brew original cc-switch still runs in the background sharing
-`~/.cc-switch` (wrote again at 16:43) — this fork always tests in the isolated dir. Working
-tree uncommitted = this whole "302 default" batch + this memo update.
+data isolation). The brew original cc-switch still runs in the background writing to
+`~/.cc-switch` — irrelevant since the evening batch moved this fork to `~/.302-cc-switch`.
+
+### ✅ Done: independent data dir + 302 productization (evening of 2026-07-09)
+
+Four commits, all installed and eyeballed on this Mac:
+
+1. **Independent data dir** (`00ffb059`): `~/.cc-switch` → `~/.302-cc-switch`, 64 files of
+   mechanical replacement + three manual fixes. **Deliberately no migration** (the old dir
+   belongs to the original app). WebDAV/S3 default remote root changed to
+   `302-cc-switch-sync` (prevents sync clobbering with upstream); dropped upstream v3.10.3's
+   Windows HOME legacy-db fallback (dead code here). Verified with lsof: both apps running
+   side by side each hold their own DB.
+2. **Icon fix** (`ceb9a371`): ai302 is a PNG; it was registered in `icons` (the inline-SVG
+   map) so its URL rendered as literal text. Moved to `iconUrls` → `<img>`.
+3. **302 productization** (`63afe28f`):
+   - 302 seeds undeletable: backend `is_ai302_seed_id` guard at the top of
+     `ProviderService::delete`; frontend `isProtected` disables the delete button
+     (`ProviderCard` keys off the `ai302-` id prefix)
+   - Minimal key dialog `Ai302KeyDialog`: App.tsx swaps it in for `EditProviderDialog` when
+     the id is `ai302-*`; key lands in ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY
+     per app
+   - Official-login detection for Claude: live import with no BASE_URL/API_KEY/AUTH_TOKEN in
+     env skips creating "default"; startup then sets claude-official as current (mirrors
+     Codex's has_login_material logic)
+   - Two new integration tests (official-login skip / 302 delete rejected)
+4. **Key verification + dialog polish** (`da26ec63`): a "Verify key" button hits
+   `/v1/models` (reuses `fetch_models_for_config`, using the base_url actually in the
+   config, so the cn mirror keeps working); 401/403 → invalid key, anything else → network
+   (confirmed with a bogus key: 302 returns 401). Layout follows the app's dialog spec
+   (body `px-6 py-5`); key input reuses `ApiKeyInput`.
+
+Design decision: the official 302 seed card stays "key only, zero config"; users who want
+model remapping (e.g. sonnet → GLM) duplicate the card — the copy's id isn't `ai302-*`, so
+it automatically loses both the protection and the minimal dialog.
+
+New TODOs (besides the memo's existing ones):
+- [ ] Key-page link is tentatively `https://dash.302.ai/apis/list` (`src/config/ai302.ts`) — owner to confirm
+- [ ] "Auto-claim key" waits on 302 platform API docs
+- [ ] Model-plan dropdown in the minimal dialog (the verify call already returns the model list) — not yet approved
+- [ ] Real-key end-to-end: verify → switch → run Claude Code once (confirm 302 knows the model names CC requests)
+- [ ] The owner's own machine still has the historical "default" card (switch to Claude Official, then delete it)
 
 ### Deliberately kept (gray areas)
 
