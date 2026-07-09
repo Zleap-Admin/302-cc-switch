@@ -4,6 +4,7 @@
 
 const iconMappings = {
   // AI 服务商
+  "302": { icon: "ai302", iconColor: "#7C3AED" },
   claude: { icon: "claude", iconColor: "#D4915D" },
   anthropic: { icon: "anthropic", iconColor: "#D4915D" },
   deepseek: { icon: "deepseek", iconColor: "#1E88E5" },

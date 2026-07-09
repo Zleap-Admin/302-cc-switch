@@ -1,7 +1,7 @@
 {
-  "name": "cc-switch",
+  "name": "302-cc-switch",
   "version": "3.16.5",
-  "description": "All-in-One Assistant for Claude Code, Codex & Gemini CLI",
+  "description": "302.AI edition of CC Switch — All-in-One Assistant for Claude Code, Codex & Gemini CLI",
   "type": "module",
   "scripts": {
     "dev": "pnpm tauri dev",

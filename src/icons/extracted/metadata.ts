@@ -615,6 +615,13 @@ export const iconMetadata: Record<string, IconMetadata> = {
     keywords: ["eflowcode", "e-flowcode", "flow"],
     defaultColor: "currentColor",
   },
+  ai302: {
+    name: "ai302",
+    displayName: "302.AI",
+    category: "ai-provider",
+    keywords: ["302", "302ai", "302.ai", "ai302"],
+    defaultColor: "#7C3AED",
+  },
   shengsuanyun: {
     name: "shengsuanyun",
     displayName: "Shengsuanyun",
