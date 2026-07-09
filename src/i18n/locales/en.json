@@ -2920,8 +2920,14 @@
   },
   "ai302": {
     "dialogTitle": "302.AI API Key",
-    "dialogHint": "The endpoint and models are preconfigured; models follow your client automatically. Just paste your 302.AI API key.",
+    "dialogHint": "Endpoint and models are preconfigured; models follow your client automatically. All that's missing is this key.",
     "keyLabel": "API Key",
-    "getKey": "No key yet? Get one at 302.AI"
+    "getKey": "No key yet? Get one at 302.AI",
+    "verify": "Verify key",
+    "verifying": "Verifying…",
+    "verifyOk": "Key works — {{num}} models ready",
+    "verifyNeedKey": "Enter a key before verifying",
+    "verifyFailKey": "Key is invalid or expired",
+    "verifyFailNetwork": "Can't reach 302.AI — check your network and retry"
   }
 }

@@ -2920,8 +2920,14 @@
   },
   "ai302": {
     "dialogTitle": "302.AI API Key",
-    "dialogHint": "エンドポイントとモデルは設定済みで、モデルはクライアントに自動追従します。302.AI の API Key を入力するだけです。",
+    "dialogHint": "エンドポイントとモデルは設定済みで、モデルはクライアントに自動追従します。必要なのはこの Key だけです。",
     "keyLabel": "API Key",
-    "getKey": "Key がない場合は 302.AI で取得"
+    "getKey": "Key がない場合は 302.AI で取得",
+    "verify": "Key を検証",
+    "verifying": "検証中……",
+    "verifyOk": "Key は有効です。{{num}} 個のモデルが利用可能",
+    "verifyNeedKey": "先に Key を入力してください",
+    "verifyFailKey": "Key が無効か期限切れです",
+    "verifyFailNetwork": "302.AI に接続できません。ネットワークを確認して再試行してください"
   }
 }

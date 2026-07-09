@@ -2920,8 +2920,14 @@
   },
   "ai302": {
     "dialogTitle": "302.AI API Key",
-    "dialogHint": "接口地址与模型已预置，模型自动跟随客户端。只需填写你的 302.AI API Key。",
+    "dialogHint": "接口地址与模型均已预置，模型自动跟随客户端——只差这一把 Key。",
     "keyLabel": "API Key",
-    "getKey": "没有 Key？去 302.AI 领取"
+    "getKey": "没有 Key？去 302.AI 领取",
+    "verify": "验证 Key",
+    "verifying": "正在验证……",
+    "verifyOk": "Key 可用，{{num}} 个模型就绪",
+    "verifyNeedKey": "请先填写 Key 再验证",
+    "verifyFailKey": "Key 无效或已过期",
+    "verifyFailNetwork": "连不上 302.AI，请检查网络后重试"
   }
 }

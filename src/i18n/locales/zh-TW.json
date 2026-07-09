@@ -2891,8 +2891,14 @@
   },
   "ai302": {
     "dialogTitle": "302.AI API Key",
-    "dialogHint": "介面位址與模型均已預置，模型自動跟隨客戶端。只需填寫你的 302.AI API Key。",
+    "dialogHint": "介面位址與模型均已預置，模型自動跟隨客戶端——只差這一把 Key。",
     "keyLabel": "API Key",
-    "getKey": "沒有 Key？前往 302.AI 領取"
+    "getKey": "沒有 Key？前往 302.AI 領取",
+    "verify": "驗證 Key",
+    "verifying": "驗證中……",
+    "verifyOk": "Key 可用，{{num}} 個模型就緒",
+    "verifyNeedKey": "請先填寫 Key 再驗證",
+    "verifyFailKey": "Key 無效或已過期",
+    "verifyFailNetwork": "無法連上 302.AI，請檢查網路後重試"
   }
 }

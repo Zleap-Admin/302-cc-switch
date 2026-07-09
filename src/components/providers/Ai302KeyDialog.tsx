@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ExternalLink, Save } from "lucide-react";
+import {
+  CheckCircle2,
+  ExternalLink,
+  Loader2,
+  Save,
+  XCircle,
+} from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -10,15 +16,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import ApiKeyInput from "@/components/providers/forms/ApiKeyInput";
 import { ProviderIcon } from "@/components/ProviderIcon";
-import { AI302_API_KEY_URL } from "@/config/ai302";
+import { AI302_API_BASE_URL, AI302_API_KEY_URL } from "@/config/ai302";
+import { fetchModelsForConfig } from "@/lib/api/model-fetch";
 import { settingsApi, type AppId } from "@/lib/api";
 import type { Provider } from "@/types";
 
 // 302 内置供应商的专属编辑框：接口地址与模型都已预置，
-// 用户唯一要做的事就是填 key——所以只给一个 key 输入框。
+// 用户唯一要做的事就是填 key。「验证」按钮拿 key 去请求 302 的
+// 模型列表接口，让用户保存前就知道这把 key 到底能不能用。
 // 通用编辑（改名、调模型等）走 EditProviderDialog 的完整表单，这里不做。
 
 interface Ai302KeyDialogProps {
@@ -57,6 +64,24 @@ function writeApiKey(
   return { ...config, env: { ...env, [field]: key } };
 }
 
+// 验证时优先用配置里实际生效的接口地址（用户可能切到国内域名），codex 的
+// config 是 toml 文本不做解析，直接用默认根地址
+function readBaseUrl(appId: AppId, config: Record<string, unknown>): string {
+  const env = config.env as Record<string, unknown> | undefined;
+  const field =
+    appId === "gemini" ? "GOOGLE_GEMINI_BASE_URL" : "ANTHROPIC_BASE_URL";
+  const fromEnv = appId === "codex" ? undefined : env?.[field];
+  return typeof fromEnv === "string" && fromEnv.trim() !== ""
+    ? fromEnv
+    : AI302_API_BASE_URL;
+}
+
+type VerifyState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ok"; modelCount: number }
+  | { status: "fail"; reason: "key" | "network" | "empty" };
+
 export function Ai302KeyDialog({
   open,
   provider,
@@ -67,6 +92,7 @@ export function Ai302KeyDialog({
   const { t } = useTranslation();
   const [apiKey, setApiKey] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [verify, setVerify] = useState<VerifyState>({ status: "idle" });
 
   const initialKey = useMemo(
     () =>
@@ -80,12 +106,34 @@ export function Ai302KeyDialog({
   useEffect(() => {
     if (open) {
       setApiKey(initialKey);
+      setVerify({ status: "idle" });
     }
   }, [open, initialKey]);
 
   if (!provider) {
     return null;
   }
+
+  const handleVerify = async (key: string) => {
+    const trimmed = key.trim();
+    if (!trimmed) {
+      setVerify({ status: "fail", reason: "empty" });
+      return;
+    }
+    setVerify({ status: "loading" });
+    try {
+      const baseUrl = readBaseUrl(
+        appId,
+        provider.settingsConfig as Record<string, unknown>,
+      );
+      const models = await fetchModelsForConfig(baseUrl, trimmed);
+      setVerify({ status: "ok", modelCount: models.length });
+    } catch (err) {
+      const msg = String(err);
+      const isAuthError = msg.includes("HTTP 401") || msg.includes("HTTP 403");
+      setVerify({ status: "fail", reason: isAuthError ? "key" : "network" });
+    }
+  };
 
   const handleSave = async () => {
     setIsSubmitting(true);
@@ -105,43 +153,98 @@ export function Ai302KeyDialog({
     }
   };
 
+  const verifyLine = (() => {
+    switch (verify.status) {
+      case "loading":
+        return (
+          <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            {t("ai302.verifying", { defaultValue: "正在验证……" })}
+          </span>
+        );
+      case "ok":
+        return (
+          <span className="inline-flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
+            <CheckCircle2 className="h-4 w-4" />
+            {t("ai302.verifyOk", {
+              defaultValue: "Key 可用，{{num}} 个模型就绪",
+              num: verify.modelCount,
+            })}
+          </span>
+        );
+      case "fail":
+        return (
+          <span className="inline-flex items-center gap-1.5 text-red-500 dark:text-red-400">
+            <XCircle className="h-4 w-4" />
+            {verify.reason === "empty"
+              ? t("ai302.verifyNeedKey", {
+                  defaultValue: "请先填写 Key 再验证",
+                })
+              : verify.reason === "key"
+                ? t("ai302.verifyFailKey", {
+                    defaultValue: "Key 无效或已过期",
+                  })
+                : t("ai302.verifyFailNetwork", {
+                    defaultValue: "连不上 302.AI，请检查网络后重试",
+                  })}
+          </span>
+        );
+      default:
+        return null;
+    }
+  })();
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[440px]">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <ProviderIcon icon="ai302" name={provider.name} size={22} />
+      <DialogContent className="sm:max-w-[480px]">
+        <DialogHeader className="text-left sm:text-left">
+          <DialogTitle className="flex items-center gap-2.5">
+            <ProviderIcon icon="ai302" name={provider.name} size={24} />
             {t("ai302.dialogTitle", { defaultValue: "302.AI API Key" })}
           </DialogTitle>
           <DialogDescription>
             {t("ai302.dialogHint", {
               defaultValue:
-                "接口地址与模型已预置，模型自动跟随客户端。只需填写你的 302.AI API Key。",
+                "接口地址与模型均已预置，模型自动跟随客户端——只差这一把 Key。",
             })}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-2">
-          <Label htmlFor="ai302-api-key">
-            {t("ai302.keyLabel", { defaultValue: "API Key" })}
-          </Label>
-          <Input
+        <div className="px-6 py-5 space-y-4">
+          <ApiKeyInput
             id="ai302-api-key"
             value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
+            onChange={(value) => {
+              setApiKey(value);
+              // key 一变，旧的验证结论就不作数了
+              setVerify({ status: "idle" });
+            }}
             placeholder="sk-..."
-            autoComplete="off"
-            spellCheck={false}
-            className="font-mono"
+            label={t("ai302.keyLabel", { defaultValue: "API Key" })}
           />
-          <button
-            type="button"
-            onClick={() => void settingsApi.openExternal(AI302_API_KEY_URL)}
-            className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-            {t("ai302.getKey", { defaultValue: "没有 Key？去 302.AI 领取" })}
-          </button>
+
+          <div className="flex items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={() => void settingsApi.openExternal(AI302_API_KEY_URL)}
+              className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              {t("ai302.getKey", { defaultValue: "没有 Key？去 302.AI 领取" })}
+            </button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void handleVerify(apiKey)}
+              disabled={verify.status === "loading"}
+            >
+              {t("ai302.verify", { defaultValue: "验证 Key" })}
+            </Button>
+          </div>
+
+          {/* 占位固定高度，验证结果出现时布局不跳动 */}
+          <div className="min-h-5 text-sm">{verifyLine}</div>
         </div>
 
         <DialogFooter>

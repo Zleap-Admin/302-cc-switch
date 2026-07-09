@@ -9,6 +9,9 @@ const AI302_SEED_PREFIX = "ai302-";
 // 用户领取 / 查看 API Key 的入口页（302.AI 控制台）
 export const AI302_API_KEY_URL = "https://dash.302.ai/apis/list";
 
+// 302 聚合接口根地址（种子配置的默认值，验证 Key 时兜底用）
+export const AI302_API_BASE_URL = "https://api.302.ai";
+
 // 302 内置种子供应商：不可删除，编辑时走「只填 Key」精简表单
 export function isAi302SeedProvider(provider: Pick<Provider, "id">): boolean {
   return provider.id.startsWith(AI302_SEED_PREFIX);
