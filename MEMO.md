@@ -38,7 +38,8 @@
 - README 重写为 302 版（仅 EN + ZH，删了日/德语版）；`assets/partners/` 整目录删除
 - 302.AI logo（GitHub org 头像）注册为图标 `ai302`，名称含 "302" 的供应商自动推断此图标
 - macOS 开机自启的 app 名匹配同步改为 `302 CC Switch`（`src-tauri/src/auto_launch.rs`，不改会静默失效）
-- 深链接协议保持 `ccswitch://` 未动；配置目录仍是 `~/.cc-switch`（数据兼容）
+- 深链接协议保持 `ccswitch://` 未动；配置目录已改为 `~/.302-cc-switch`（2026-07-09，与原版
+  `~/.cc-switch` 完全隔离，不迁移旧数据；WebDAV/S3 默认远端根目录同步改为 `302-cc-switch-sync`）
 
 **3. 更新与发版**
 
@@ -154,7 +155,9 @@ All 7 tools' preset lists were rewritten to contain only **official + 302.AI**, 
 - README rewritten (EN + ZH only; JA/DE deleted); `assets/partners/` removed entirely
 - 302.AI logo registered as icon `ai302`; providers named "302*" auto-infer it
 - macOS auto-launch app-name matching updated to `302 CC Switch` (`src-tauri/src/auto_launch.rs` — would silently break otherwise)
-- Deep-link scheme stays `ccswitch://`; config dir stays `~/.cc-switch` (data compatibility)
+- Deep-link scheme stays `ccswitch://`; config dir moved to `~/.302-cc-switch` (2026-07-09, fully
+  isolated from upstream's `~/.cc-switch`, no data migration; WebDAV/S3 default remote root is now
+  `302-cc-switch-sync`)
 
 **3. Updater & release**
 

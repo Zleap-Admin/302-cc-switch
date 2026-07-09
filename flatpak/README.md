@@ -51,7 +51,7 @@ The current manifest uses `--filesystem=home` by default for "download and run" 
 If you prefer minimal permissions (e.g., for Flathub submission or security concerns), you can replace `--filesystem=home` in `flatpak/com.ai302.ccswitch.yml` with more precise grants:
 
 ```yaml
-  - --filesystem=~/.cc-switch:create
+  - --filesystem=~/.302-cc-switch:create
   - --filesystem=~/.claude:create
   - --filesystem=~/.claude.json
   - --filesystem=~/.codex:create
