@@ -960,7 +960,7 @@ pub fn run() {
                 })
                 .show_menu_on_left_click(true);
 
-            // 使用平台对应的托盘图标（macOS 使用模板图标适配深浅色）
+            // 使用平台对应的托盘图标（macOS 使用 302 模板图标适配深浅色）
             #[cfg(target_os = "macos")]
             {
                 if let Some(icon) = macos_tray_icon() {
