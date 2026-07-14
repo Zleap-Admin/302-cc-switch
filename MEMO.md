@@ -163,6 +163,70 @@
 - 图标库里的第三方厂商图标——自定义供应商选图标时用
 - GitHub Copilot / Codex OAuth / AWS Bedrock 的**预设**删了，但功能代码都在，要恢复只需加回预设条目
 
+### ✅ 已修复：Codex 切换供应商的记账顺序 bug（2026-07-14）
+
+主理人反馈 Codex 切到 "OpenAI Official" 后界面显示"使用中"，但实际请求仍打到
+`https://api.302.ai/v1/responses`，报 401 Invalid API Key。排查是通过直接比对三处状态
+（`~/.codex/config.toml` 落盘文件、应用数据库 `providers.is_current`、本机 `settings.json` 的
+`currentProviderCodex`）实测出来的，不是靠猜：
+
+- 根因：`switch_normal`（`src-tauri/src/services/provider/mod.rs`）之前是**先**把"当前供应商"
+  记到 `settings.json` + DB，**再**去写 live 的 `config.toml`/`auth.json`。如果写 live 那步没有
+  真正生效（本次没查清最初触发原因），记账已经先跑到前面去了。
+- 恶化机制：下次任意切换时，「回填」逻辑会信任这个记账，把当时磁盘上（其实还是上一个第三方
+  供应商）的配置当成"官方供应商自己的配置"存回数据库——把 302.AI 的 `[model_providers.custom]`
+  路由表焊死进了 `codex-official` 这一行的存档，此后无论怎么切都会把这段污染的配置写回 live，
+  死循环。
+- 修复：把写 live 的调用挪到记账（`settings::set_current_provider` / `db.set_current_provider`）
+  **之前**，只有 live 真正写成功才更新记账指针。这样任何一次写 live 失败都不会让记账超前于磁盘
+  真实状态，从根上掐断了"回填污染错误的供应商行"这条路。
+- 主理人本机已被污染的两处数据（DB 里 `codex-official` 的存档 config、`~/.codex/config.toml`）
+  已手动清理干净（脚本剥掉了 `model_provider` 行和 `[model_providers.custom]` 表，其余字段原样
+  保留），ChatGPT 登录令牌未受影响。
+- 验证：`cargo check` 通过；`services::provider` + `switch` 相关单测 70 个全过。
+
+### ✅ 已加：Codex "OpenAI API" 直连预设（2026-07-14）
+
+主理人想在自己的 Codex 里同时留一张"订阅登录"卡和一张"真实 OpenAI API Key"卡，随时手动切换。
+排查发现原先只有"OpenAI Official"（订阅登录）+ "302.AI"两张，没有真正直连 OpenAI 官方 API 的
+预设——加了一张：
+
+- `codexProviderPresets.ts` 新增 `"OpenAI API"`：`base_url = "https://api.openai.com/v1"`，
+  `apiFormat: "openai_responses"`（走原生 Responses 接口，不需要像 302.AI 那样本地转换成
+  Chat Completions），`category: "custom"`（不是 `"official"`，避免跟订阅登录那张混淆、也不触发
+  官方专属的备份/保护逻辑）
+- **打破了既有约定**：`tests/config/ai302ProviderPresets.test.ts` 原本锁死"每个应用预设只有
+  官方 + 302.AI"（302 产品化的核心规则之一）。这张卡是主理人明确要求的例外——给自己留一条绕开
+  302.AI、直连 OpenAI 的路——已更新该测试，注释里写明这是唯一的例外，不代表规则松动
+- 按主理人要求做成**普通预设**，不是 302.AI 那种"开箱自带、不可删除"的种子卡：需要在"添加供应商"
+  里手动选一次，选完可正常编辑/删除，没有特殊保护，改动量最小
+- 验证：`tsc --noEmit` 零错误；`vitest` 372/372 全过
+
+⚠️ 待办：主理人在自己机器上验证 Codex 401 是否真的解决（数据已手动清理，但还没重新
+`pnpm tauri build` 装带根因修复的新版本去验证"以后切换不会再复现"）；"OpenAI API"这张新卡还
+没有实机点开"添加供应商"验证过表单显示是否正常。
+
+### ✅ 已修：首次运行引导页三处小问题（2026-07-14）
+
+主理人截图反馈引导页（`FirstRunNoticeDialog.tsx`，302.AI 首次配置向导）几处问题，逐一确认后改：
+
+- **对齐 bug**：第 0 步"一个 Key，连接你的编码工具"下面两张卡片，第二张被多套了一个
+  `sm:translate-y-3`，导致跟第一张卡错位。删掉这个多余的类。
+- **文案**：第 4 步模型策略里"跟随 Claude Code"这个选项名不够准确（没说清是"原样转发给官方
+  接口，不做模型替换"），按主理人选定的方向改成"跟随官方调用"（简体 `zh.json`、繁体
+  `zh-TW.json` 同步；英文 `en.json`/日文 `ja.json` 未动，仍是 "Follow Claude Code"，如需一起改
+  再说）。
+- **写死的展示值**：第 4 步给 Codex/Gemini 显示的默认模型（原来写死 `"gpt-5.5"` /
+  `"gemini-3.5-flash"`）和 Codex 的接口地址（原来写死 `${AI302_API_BASE_URL}/v1`），改成从
+  `codexProviderPresets` / `geminiProviderPresets` 里实际的"302.AI"预设定义读取（复用
+  `ai302.ts` 已有的 `getAi302ModelStrategy` / `readAi302BaseUrl`），避免以后预设改了默认模型或
+  地址，这两处引导页文案却没跟着变、静默显示过期信息——这类问题肉眼点一遍看不出来，只有读代码
+  能发现。
+- 验证：`tsc --noEmit` 零错误；`vitest` 372/372 全过。
+- 这几处改动都落在 `FirstRunNoticeDialog.tsx` / `zh.json` / `zh-TW.json` 里，这三个文件本身还
+  躺着主理人自己一大块（`FirstRunNoticeDialog.tsx` 约 1000+ 行）尚未提交的引导页开发工作——这次
+  一并提交，不是只提交这三处小改动。
+
 ---
 
 ## English
@@ -318,3 +382,77 @@ New TODOs (besides the memo's existing ones):
 - NewAPI template in the universal-provider panel — self-hosted gateway template
 - Third-party vendor icons in the icon library — used by the custom-provider icon picker
 - GitHub Copilot / Codex OAuth / AWS Bedrock **presets** removed, but all feature code remains; restoring = re-adding preset entries
+
+### ✅ Fixed: Codex provider-switch bookkeeping-ordering bug (2026-07-14)
+
+Owner reported Codex showing "OpenAI Official" as active after switching, while requests
+still hit `https://api.302.ai/v1/responses` and got 401 Invalid API Key. Root-caused by
+directly diffing three states (live `~/.codex/config.toml`, DB `providers.is_current`,
+local `settings.json`'s `currentProviderCodex`) rather than guessing:
+
+- Root cause: `switch_normal` (`src-tauri/src/services/provider/mod.rs`) used to record the
+  "current provider" pointer (settings.json + DB) **before** writing the live
+  `config.toml`/`auth.json`. When the live write didn't actually take effect once (original
+  trigger not fully pinned down), the pointer had already moved ahead of reality.
+- How it got worse: on the *next* switch, the backfill step trusted that pointer and saved
+  whatever was actually on disk (still the previous third-party provider's routing) into the
+  DB row it believed was "official" — permanently baking 302.AI's
+  `[model_providers.custom]` table into the `codex-official` row. Every subsequent switch
+  then wrote that poisoned config back to live, on a loop.
+- Fix: moved the live write ahead of the pointer updates, so pointers only advance once live
+  has actually landed. A failed live write can no longer leave the pointer pointing somewhere
+  the disk doesn't match, which is what fed the backfill-poisoning loop.
+- Manually cleaned the two pieces of already-poisoned data on the owner's machine (the DB's
+  `codex-official` stored config, and `~/.codex/config.toml`) — stripped the `model_provider`
+  line and `[model_providers.custom]` table, left everything else untouched; ChatGPT login
+  tokens were unaffected.
+- Verified: `cargo check` clean; 70 `services::provider` + `switch` unit tests passing.
+
+### ✅ Added: Codex "OpenAI API" direct-connect preset (2026-07-14)
+
+Owner wants to keep both a subscription-login card and a real OpenAI API-key card side by
+side on Codex, switchable at will. Previously there was only "OpenAI Official" (subscription
+login) + "302.AI" — no preset for a genuine direct-to-OpenAI API key. Added one:
+
+- New `"OpenAI API"` entry in `codexProviderPresets.ts`: `base_url =
+  "https://api.openai.com/v1"`, `apiFormat: "openai_responses"` (native Responses API, no
+  local Chat-Completions conversion needed the way 302.AI requires), `category: "custom"`
+  (not `"official"`, to avoid conflating it with the subscription card or triggering
+  official-only backup/protection logic).
+- **Breaks an existing invariant**: `tests/config/ai302ProviderPresets.test.ts` previously
+  locked "every app's preset list is official + 302.AI only" as one of the 302
+  productization's core rules. This card is a deliberate, owner-approved exception — a
+  personal escape hatch to bypass 302.AI and go straight to OpenAI — the test has been
+  updated with a comment marking it as the sole exception, not a loosening of the rule.
+- Built as a **plain preset** per the owner's request, not a 302.AI-style seeded/undeletable
+  card: it has to be picked once from "Add provider," then behaves like any normal editable/
+  deletable provider — smallest possible change.
+- Verified: `tsc --noEmit` clean; `vitest` 372/372 passing.
+
+⚠️ TODO: owner still needs to verify on their own machine that the Codex 401 is actually
+gone (data was manually cleaned, but the app hasn't been rebuilt with the root-cause fix yet
+to confirm future switches won't reproduce it); the new "OpenAI API" card hasn't been
+eyeballed yet by actually opening "Add provider" in the running app.
+
+### ✅ Fixed: three small first-run onboarding issues (2026-07-14)
+
+Owner screenshotted issues in the onboarding wizard (`FirstRunNoticeDialog.tsx`, the 302.AI
+first-run setup flow). Confirmed and fixed each:
+
+- **Misalignment**: on step 0 ("One Key, connect your coding tools"), the second of the two
+  intro cards had a stray `sm:translate-y-3` offsetting it from the first. Removed.
+- **Copy**: step 4's model-policy option "Follow Claude Code" didn't clearly convey "passes
+  the model through to the official endpoint unchanged" — reworded to "跟随官方调用" per the
+  owner's chosen direction (zh + zh-TW updated; en/ja left as "Follow Claude Code" for now).
+- **Hardcoded display values**: step 4's Codex/Gemini default-model labels (previously
+  hardcoded `"gpt-5.5"` / `"gemini-3.5-flash"`) and Codex's shown endpoint (previously
+  hardcoded `${AI302_API_BASE_URL}/v1`) now read from the actual "302.AI" entries in
+  `codexProviderPresets` / `geminiProviderPresets` (reusing `ai302.ts`'s existing
+  `getAi302ModelStrategy` / `readAi302BaseUrl`) instead of duplicating the values inline —
+  so if the presets' defaults ever change, this screen won't silently go stale. This class of
+  bug is invisible by eyeballing the running app; it only surfaces from reading the code.
+- Verified: `tsc --noEmit` clean; `vitest` 372/372 passing.
+- These edits land inside `FirstRunNoticeDialog.tsx` / `zh.json` / `zh-TW.json`, which already
+  carried a large chunk (~1000+ lines in `FirstRunNoticeDialog.tsx`) of the owner's own
+  not-yet-committed onboarding work — this commit includes all of it, not just the three
+  fixes above.
