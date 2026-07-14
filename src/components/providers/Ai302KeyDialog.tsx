@@ -2,9 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   CheckCircle2,
+  ChevronDown,
   ExternalLink,
   Loader2,
+  Route,
   Save,
+  Settings2,
   XCircle,
 } from "lucide-react";
 import {
@@ -16,17 +19,27 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import ApiKeyInput from "@/components/providers/forms/ApiKeyInput";
 import { ProviderIcon } from "@/components/ProviderIcon";
-import { AI302_API_BASE_URL, AI302_API_KEY_URL } from "@/config/ai302";
+import {
+  AI302_API_KEY_URL,
+  getAi302ModelStrategy,
+  readAi302ApiKey,
+  readAi302BaseUrl,
+  writeAi302ApiKey,
+} from "@/config/ai302";
 import { fetchModelsForConfig } from "@/lib/api/model-fetch";
 import { settingsApi, type AppId } from "@/lib/api";
 import type { Provider } from "@/types";
 
-// 302 内置供应商的专属编辑框：接口地址与模型都已预置，
-// 用户唯一要做的事就是填 key。「验证」按钮拿 key 去请求 302 的
-// 模型列表接口，让用户保存前就知道这把 key 到底能不能用。
-// 通用编辑（改名、调模型等）走 EditProviderDialog 的完整表单，这里不做。
+// 302 内置供应商的专属编辑框：接口地址已预置，模型策略在表单内明确展示。
+// 「一键诊断」使用模型列表接口检查 key 与网络，不产生模型调用费用。
+// 改名、固定模型等低频操作继续复用 EditProviderDialog 的完整表单。
 
 interface Ai302KeyDialogProps {
   open: boolean;
@@ -37,43 +50,7 @@ interface Ai302KeyDialogProps {
     provider: Provider;
     originalId?: string;
   }) => Promise<void> | void;
-}
-
-// key 在各应用配置里的落点与后端种子(AI302_SEEDS)保持一致
-function readApiKey(appId: AppId, config: Record<string, unknown>): string {
-  if (appId === "codex") {
-    const auth = config.auth as Record<string, unknown> | undefined;
-    return typeof auth?.OPENAI_API_KEY === "string" ? auth.OPENAI_API_KEY : "";
-  }
-  const env = config.env as Record<string, unknown> | undefined;
-  const field = appId === "gemini" ? "GEMINI_API_KEY" : "ANTHROPIC_API_KEY";
-  return typeof env?.[field] === "string" ? (env[field] as string) : "";
-}
-
-function writeApiKey(
-  appId: AppId,
-  config: Record<string, unknown>,
-  key: string,
-): Record<string, unknown> {
-  if (appId === "codex") {
-    const auth = (config.auth ?? {}) as Record<string, unknown>;
-    return { ...config, auth: { ...auth, OPENAI_API_KEY: key } };
-  }
-  const env = (config.env ?? {}) as Record<string, unknown>;
-  const field = appId === "gemini" ? "GEMINI_API_KEY" : "ANTHROPIC_API_KEY";
-  return { ...config, env: { ...env, [field]: key } };
-}
-
-// 验证时优先用配置里实际生效的接口地址（用户可能切到国内域名），codex 的
-// config 是 toml 文本不做解析，直接用默认根地址
-function readBaseUrl(appId: AppId, config: Record<string, unknown>): string {
-  const env = config.env as Record<string, unknown> | undefined;
-  const field =
-    appId === "gemini" ? "GOOGLE_GEMINI_BASE_URL" : "ANTHROPIC_BASE_URL";
-  const fromEnv = appId === "codex" ? undefined : env?.[field];
-  return typeof fromEnv === "string" && fromEnv.trim() !== ""
-    ? fromEnv
-    : AI302_API_BASE_URL;
+  onAdvancedSettings?: () => void;
 }
 
 type VerifyState =
@@ -88,6 +65,7 @@ export function Ai302KeyDialog({
   appId,
   onOpenChange,
   onSubmit,
+  onAdvancedSettings,
 }: Ai302KeyDialogProps) {
   const { t } = useTranslation();
   const [apiKey, setApiKey] = useState("");
@@ -97,7 +75,10 @@ export function Ai302KeyDialog({
   const initialKey = useMemo(
     () =>
       provider
-        ? readApiKey(appId, provider.settingsConfig as Record<string, unknown>)
+        ? readAi302ApiKey(
+            appId,
+            provider.settingsConfig as Record<string, unknown>,
+          )
         : "",
     [provider?.id, appId, open],
   );
@@ -114,6 +95,20 @@ export function Ai302KeyDialog({
     return null;
   }
 
+  const config = provider.settingsConfig as Record<string, unknown>;
+  const modelStrategy = getAi302ModelStrategy(appId, config);
+  const baseUrl = readAi302BaseUrl(appId, config);
+  const clientName =
+    appId === "claude"
+      ? "Claude Code"
+      : appId === "claude-desktop"
+        ? "Claude Desktop"
+        : appId === "codex"
+          ? "Codex"
+          : appId === "gemini"
+            ? "Gemini CLI"
+            : appId;
+
   const handleVerify = async (key: string) => {
     const trimmed = key.trim();
     if (!trimmed) {
@@ -122,10 +117,6 @@ export function Ai302KeyDialog({
     }
     setVerify({ status: "loading" });
     try {
-      const baseUrl = readBaseUrl(
-        appId,
-        provider.settingsConfig as Record<string, unknown>,
-      );
       const models = await fetchModelsForConfig(baseUrl, trimmed);
       setVerify({ status: "ok", modelCount: models.length });
     } catch (err) {
@@ -140,11 +131,7 @@ export function Ai302KeyDialog({
     try {
       const updated: Provider = {
         ...provider,
-        settingsConfig: writeApiKey(
-          appId,
-          provider.settingsConfig as Record<string, unknown>,
-          apiKey.trim(),
-        ),
+        settingsConfig: writeAi302ApiKey(appId, config, apiKey.trim()),
       };
       await onSubmit({ provider: updated, originalId: provider.id });
       onOpenChange(false);
@@ -205,7 +192,7 @@ export function Ai302KeyDialog({
           <DialogDescription>
             {t("ai302.dialogHint", {
               defaultValue:
-                "接口地址与模型均已预置，模型自动跟随客户端——只差这一把 Key。",
+                "接口地址已预置，模型策略会在下方明确显示。现在只差这一把 Key。",
             })}
           </DialogDescription>
         </DialogHeader>
@@ -245,9 +232,101 @@ export function Ai302KeyDialog({
 
           {/* 占位固定高度，验证结果出现时布局不跳动 */}
           <div className="min-h-5 text-sm">{verifyLine}</div>
+
+          <div className="rounded-lg border border-border bg-muted/30 p-3.5">
+            <div className="flex items-start gap-3">
+              <Route className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
+              <div className="min-w-0 flex-1 space-y-1">
+                <div className="text-sm font-medium">
+                  {t("ai302.modelStrategyTitle", {
+                    defaultValue: "模型策略",
+                  })}
+                </div>
+                {modelStrategy.mode === "follow" ? (
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    {t("ai302.modelStrategyFollow", {
+                      client: clientName,
+                      defaultValue: `跟随 ${clientName}，客户端选择的模型 ID 会原样发送给 302.AI。`,
+                    })}
+                  </p>
+                ) : (
+                  <div className="space-y-1.5">
+                    <p className="text-xs text-muted-foreground">
+                      {t("ai302.modelStrategyFixed", {
+                        defaultValue: "已固定模型",
+                      })}
+                    </p>
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                      {modelStrategy.mappings.map((mapping) => (
+                        <span key={`${mapping.role}-${mapping.model}`}>
+                          <span className="text-muted-foreground">
+                            {mapping.role === "default"
+                              ? t("ai302.defaultModel", {
+                                  defaultValue: "默认",
+                                })
+                              : mapping.role}
+                            :
+                          </span>{" "}
+                          <span className="font-medium">{mapping.model}</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <Collapsible>
+            <CollapsibleTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="group h-8 w-full justify-between px-2 text-muted-foreground"
+              >
+                <span className="inline-flex items-center gap-2">
+                  <Settings2 className="h-3.5 w-3.5" />
+                  {t("ai302.technicalDetails", {
+                    defaultValue: "技术详情",
+                  })}
+                </span>
+                <ChevronDown className="h-3.5 w-3.5 transition-transform group-data-[state=open]:rotate-180" />
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="space-y-2 rounded-md bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground">
+              <div className="flex items-start justify-between gap-4">
+                <span>{t("ai302.endpoint", { defaultValue: "请求地址" })}</span>
+                <span className="break-all text-right font-mono text-foreground">
+                  {baseUrl}
+                </span>
+              </div>
+              <p className="leading-relaxed">
+                {t("ai302.diagnosisHint", {
+                  defaultValue:
+                    "验证会同时检查 Key、网络和模型列表，不会发起付费模型请求。",
+                })}
+              </p>
+            </CollapsibleContent>
+          </Collapsible>
         </div>
 
         <DialogFooter>
+          {onAdvancedSettings && (
+            <Button
+              variant="ghost"
+              onClick={() => {
+                onAdvancedSettings();
+              }}
+              disabled={isSubmitting}
+              className="sm:mr-auto"
+            >
+              <Settings2 className="mr-2 h-4 w-4" />
+              {t("ai302.advancedModels", {
+                defaultValue: "高级模型设置",
+              })}
+            </Button>
+          )}
           <Button
             variant="outline"
             onClick={() => onOpenChange(false)}
@@ -255,7 +334,10 @@ export function Ai302KeyDialog({
           >
             {t("common.cancel")}
           </Button>
-          <Button onClick={() => void handleSave()} disabled={isSubmitting}>
+          <Button
+            onClick={() => void handleSave()}
+            disabled={isSubmitting || !apiKey.trim()}
+          >
             <Save className="h-4 w-4 mr-2" />
             {t("common.save")}
           </Button>

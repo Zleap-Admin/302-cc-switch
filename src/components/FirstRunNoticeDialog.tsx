@@ -208,6 +208,26 @@ export function FirstRunNoticeDialog() {
     modelMode === "follow" ||
     Object.values(fixedModels).some((model) => model.trim());
 
+  const resetWizardState = useCallback(() => {
+    setStep(0);
+    setTools(INITIAL_TOOLS);
+    setSelection(INITIAL_SELECTION);
+    setDetectionStarted(false);
+    setApiKey("");
+    setVerifyState("idle");
+    setVerifyError("");
+    setModelCount(0);
+    setModelMode("follow");
+    setFixedModels(INITIAL_FIXED_MODELS);
+    setIsConfiguring(false);
+    setConfigureResults([]);
+    setIsDiagnosing(false);
+  }, []);
+
+  useEffect(() => {
+    if (isOpen) resetWizardState();
+  }, [isOpen, resetWizardState]);
+
   const saveCompletion = useCallback(async () => {
     if (!settings) return;
     const { webdavSync: _, ...rest } = settings;

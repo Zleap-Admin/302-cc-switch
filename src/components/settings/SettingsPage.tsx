@@ -16,6 +16,8 @@ import {
   ScrollText,
   HardDriveDownload,
   FlaskConical,
+  GraduationCap,
+  ShieldCheck,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -33,7 +35,8 @@ import {
 } from "@/components/ui/accordion";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { settingsApi } from "@/lib/api";
+import { providersApi, settingsApi } from "@/lib/api";
+import type { AppId } from "@/lib/api/types";
 import { LanguageSettings } from "@/components/settings/LanguageSettings";
 import { ThemeSettings } from "@/components/settings/ThemeSettings";
 import { WindowSettings } from "@/components/settings/WindowSettings";
@@ -57,6 +60,46 @@ import { useSettings } from "@/hooks/useSettings";
 import { useImportExport } from "@/hooks/useImportExport";
 import { useTranslation } from "react-i18next";
 import type { SettingsFormState } from "@/hooks/useSettings";
+import type { Provider } from "@/types";
+
+const OFFICIAL_CONFIG_TARGETS: Array<{
+  appId: AppId;
+  providerId: string;
+  label: string;
+  settingsConfig: Provider["settingsConfig"];
+}> = [
+  {
+    appId: "claude",
+    providerId: "claude-official",
+    label: "Claude Code",
+    settingsConfig: { env: {} },
+  },
+  {
+    appId: "codex",
+    providerId: "codex-official",
+    label: "Codex",
+    settingsConfig: { auth: {}, config: "" },
+  },
+  {
+    appId: "gemini",
+    providerId: "gemini-official",
+    label: "Gemini CLI",
+    settingsConfig: { env: {}, config: {} },
+  },
+  {
+    appId: "claude-desktop",
+    providerId: "claude-desktop-official",
+    label: "Claude Desktop",
+    settingsConfig: { env: {} },
+  },
+];
+
+function isSameConfig(
+  current: Provider["settingsConfig"],
+  expected: Provider["settingsConfig"],
+): boolean {
+  return JSON.stringify(current ?? {}) === JSON.stringify(expected);
+}
 
 interface SettingsDialogProps {
   open: boolean;
@@ -109,6 +152,8 @@ export function SettingsPage({
 
   const [activeTab, setActiveTab] = useState<string>("general");
   const [showRestartPrompt, setShowRestartPrompt] = useState(false);
+  const [isCheckingOfficialConfig, setIsCheckingOfficialConfig] =
+    useState(false);
   const tabScrollContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -212,6 +257,81 @@ export function SettingsPage({
 
   const isBusy = useMemo(() => isLoading && !settings, [isLoading, settings]);
 
+  const handleRestartOnboarding = useCallback(async () => {
+    const saved = await handleAutoSave({ firstRunNoticeConfirmed: false });
+    if (saved) onOpenChange(false);
+  }, [handleAutoSave, onOpenChange]);
+
+  const handleCheckOfficialConfig = useCallback(async () => {
+    setIsCheckingOfficialConfig(true);
+    try {
+      const repaired: string[] = [];
+      const missing: string[] = [];
+
+      for (const target of OFFICIAL_CONFIG_TARGETS) {
+        const [providers, currentProviderId] = await Promise.all([
+          providersApi.getAll(target.appId),
+          providersApi.getCurrent(target.appId).catch(() => ""),
+        ]);
+        const provider = providers[target.providerId];
+        if (!provider) {
+          missing.push(target.label);
+          continue;
+        }
+
+        const isCurrentOfficial = currentProviderId === provider.id;
+        if (!isSameConfig(provider.settingsConfig, target.settingsConfig)) {
+          const updated: Provider = {
+            ...provider,
+            category: "official",
+            settingsConfig: target.settingsConfig,
+          };
+          await providersApi.update(updated, target.appId, provider.id);
+          repaired.push(target.label);
+        }
+
+        if (isCurrentOfficial) {
+          await providersApi.switch(provider.id, target.appId);
+        }
+      }
+
+      if (repaired.length > 0) {
+        toast.success(
+          t("settings.officialConfigCheckFixed", {
+            apps: repaired.join(", "),
+            defaultValue: `已恢复官方默认配置：${repaired.join(", ")}`,
+          }),
+          { closeButton: true },
+        );
+      } else if (missing.length > 0) {
+        toast.warning(
+          t("settings.officialConfigCheckMissing", {
+            apps: missing.join(", "),
+            defaultValue: `未找到这些官方供应商：${missing.join(", ")}`,
+          }),
+          { closeButton: true },
+        );
+      } else {
+        toast.success(
+          t("settings.officialConfigCheckOk", {
+            defaultValue: "官方配置检查通过",
+          }),
+          { closeButton: true },
+        );
+      }
+    } catch (error) {
+      console.error("[SettingsPage] Failed to check official config", error);
+      toast.error(
+        t("settings.officialConfigCheckFailed", {
+          defaultValue: "官方配置检查失败，请重试",
+        }),
+        { closeButton: true },
+      );
+    } finally {
+      setIsCheckingOfficialConfig(false);
+    }
+  }, [t]);
+
   return (
     <div className="flex flex-col h-full overflow-hidden px-6">
       {isBusy ? (
@@ -261,6 +381,73 @@ export function SettingsPage({
                       settings={settings}
                       onChange={handleAutoSave}
                     />
+                    <section className="space-y-4">
+                      <div className="flex items-center gap-2 border-b border-border/40 pb-2">
+                        <GraduationCap className="h-4 w-4 text-primary" />
+                        <h3 className="text-sm font-medium">
+                          {t("settings.onboardingTitle", {
+                            defaultValue: "新手引导",
+                          })}
+                        </h3>
+                      </div>
+                      <div className="flex items-center justify-between gap-4 rounded-lg border border-border p-4">
+                        <div>
+                          <div className="text-sm font-medium">
+                            {t("settings.onboardingReplay", {
+                              defaultValue: "重新运行首次配置",
+                            })}
+                          </div>
+                          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                            {t("settings.onboardingReplayDescription", {
+                              defaultValue:
+                                "重新检测客户端、验证 302.AI Key，并选择模型策略。",
+                            })}
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => void handleRestartOnboarding()}
+                          className="flex-shrink-0"
+                        >
+                          <GraduationCap className="mr-2 h-4 w-4" />
+                          {t("settings.onboardingReplayButton", {
+                            defaultValue: "打开引导",
+                          })}
+                        </Button>
+                      </div>
+                      <div className="flex items-center justify-between gap-4 rounded-lg border border-border p-4">
+                        <div>
+                          <div className="text-sm font-medium">
+                            {t("settings.officialConfigCheck", {
+                              defaultValue: "官方配置一致性检查",
+                            })}
+                          </div>
+                          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                            {t("settings.officialConfigCheckDescription", {
+                              defaultValue:
+                                "检查 Claude、Codex、Gemini 和 Claude Desktop 的官方供应商是否保持默认配置，必要时恢复官方默认。",
+                            })}
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => void handleCheckOfficialConfig()}
+                          disabled={isCheckingOfficialConfig}
+                          className="flex-shrink-0"
+                        >
+                          {isCheckingOfficialConfig ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : (
+                            <ShieldCheck className="mr-2 h-4 w-4" />
+                          )}
+                          {t("settings.officialConfigCheckButton", {
+                            defaultValue: "检查配置",
+                          })}
+                        </Button>
+                      </div>
+                    </section>
                     <SkillStorageLocationSettings
                       value={settings.skillStorageLocation ?? "cc_switch"}
                       installedCount={installedSkills?.length ?? 0}

@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from "react";
-import { GripVertical, ChevronDown, ChevronUp } from "lucide-react";
+import { GripVertical, ChevronDown, ChevronUp, Route } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type {
   DraggableAttributes,
@@ -16,7 +16,7 @@ import CopilotQuotaFooter from "@/components/CopilotQuotaFooter";
 import CodexOauthQuotaFooter from "@/components/CodexOauthQuotaFooter";
 import { PROVIDER_TYPES, TEMPLATE_TYPES } from "@/config/constants";
 import { isHermesReadOnlyProvider } from "@/config/hermesProviderPresets";
-import { isAi302SeedProvider } from "@/config/ai302";
+import { getAi302ModelStrategy, isAi302SeedProvider } from "@/config/ai302";
 import { ProviderHealthBadge } from "@/components/providers/ProviderHealthBadge";
 import { FailoverPriorityBadge } from "@/components/providers/FailoverPriorityBadge";
 import {
@@ -220,6 +220,16 @@ export function ProviderCard({
   const isCodexOauth =
     provider.meta?.providerType === PROVIDER_TYPES.CODEX_OAUTH;
   const isAi302Seed = isAi302SeedProvider(provider);
+  const ai302ModelStrategy = useMemo(
+    () =>
+      isAi302Seed
+        ? getAi302ModelStrategy(
+            appId,
+            provider.settingsConfig as Record<string, unknown>,
+          )
+        : null,
+    [appId, isAi302Seed, provider.settingsConfig],
+  );
   const codexNeedsRouting = useMemo(() => {
     if (appId !== "codex" || provider.category === "official") return false;
     if (provider.meta?.apiFormat === "openai_chat") return true;
@@ -463,6 +473,44 @@ export function ProviderCard({
               >
                 <span className="min-w-0 truncate">{displayUrl}</span>
               </button>
+            )}
+            {ai302ModelStrategy && (
+              <div
+                className="flex max-w-full items-center gap-1.5 text-xs text-muted-foreground"
+                title={
+                  ai302ModelStrategy.mode === "follow"
+                    ? t("ai302.modelStrategyFollowShort", {
+                        defaultValue: "客户端选择的模型 ID 会原样发送给 302.AI",
+                      })
+                    : ai302ModelStrategy.mappings
+                        .map((item) => `${item.role}: ${item.model}`)
+                        .join(", ")
+                }
+              >
+                <Route className="h-3.5 w-3.5 flex-shrink-0" />
+                <span className="truncate">
+                  {ai302ModelStrategy.mode === "follow"
+                    ? t("ai302.modelStrategyCardFollow", {
+                        client:
+                          appId === "claude"
+                            ? "Claude Code"
+                            : appId === "claude-desktop"
+                              ? "Claude Desktop"
+                              : appId === "codex"
+                                ? "Codex"
+                                : appId === "gemini"
+                                  ? "Gemini CLI"
+                                  : appId,
+                        defaultValue: "模型：跟随 {{client}}（原样转发）",
+                      })
+                    : t("ai302.modelStrategyCardFixed", {
+                        models: ai302ModelStrategy.mappings
+                          .map((item) => item.model)
+                          .join(" / "),
+                        defaultValue: "模型：{{models}}",
+                      })}
+                </span>
+              </div>
             )}
           </div>
         </div>

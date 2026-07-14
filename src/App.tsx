@@ -234,6 +234,9 @@ function App() {
   }, [sharedFeatureApp, currentView]);
 
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
+  const [editingProviderMode, setEditingProviderMode] = useState<
+    "simple" | "advanced"
+  >("simple");
   const [usageProvider, setUsageProvider] = useState<Provider | null>(null);
   const [confirmAction, setConfirmAction] = useState<{
     provider: Provider;
@@ -648,6 +651,7 @@ function App() {
   }) => {
     await updateProvider(provider, originalId);
     setEditingProvider(null);
+    setEditingProviderMode("simple");
   };
 
   const handleConfirmAction = async () => {
@@ -989,6 +993,7 @@ function App() {
                       activeProviderId={activeProviderId}
                       onSwitch={switchProvider}
                       onEdit={(provider) => {
+                        setEditingProviderMode("simple");
                         setEditingProvider(provider);
                       }}
                       onDelete={(provider) =>
@@ -1588,7 +1593,8 @@ function App() {
 
       {/* 302 内置种子走「只填 Key」精简弹窗，其余供应商走完整编辑表单 */}
       {effectiveEditingProvider &&
-      isAi302SeedProvider(effectiveEditingProvider) ? (
+      isAi302SeedProvider(effectiveEditingProvider) &&
+      editingProviderMode === "simple" ? (
         <Ai302KeyDialog
           open={Boolean(editingProvider)}
           provider={effectiveEditingProvider}
@@ -1596,9 +1602,11 @@ function App() {
           onOpenChange={(open) => {
             if (!open) {
               setEditingProvider(null);
+              setEditingProviderMode("simple");
             }
           }}
           onSubmit={handleEditProvider}
+          onAdvancedSettings={() => setEditingProviderMode("advanced")}
         />
       ) : (
         <EditProviderDialog
@@ -1607,6 +1615,7 @@ function App() {
           onOpenChange={(open) => {
             if (!open) {
               setEditingProvider(null);
+              setEditingProviderMode("simple");
             }
           }}
           onSubmit={handleEditProvider}
