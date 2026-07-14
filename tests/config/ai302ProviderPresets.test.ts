@@ -28,15 +28,25 @@ describe("302.AI presets across apps", () => {
     expect(p.endpointCandidates).toContain("https://api.302ai.cn");
   });
 
-  it("Codex: official + 302.AI only, 302 goes through /v1 chat", () => {
+  it("Codex: official + 302.AI + OpenAI API (direct escape hatch)", () => {
+    // 唯一的例外：Codex 额外保留一张"OpenAI API"直连卡，作为绕开 302.AI 的
+    // 官方逃生舱——主理人明确要求给自己留一条直连 OpenAI 的路，不受
+    // "只有官方+302.AI" 这条约定约束。
     expect(codexProviderPresets.map((p) => p.name)).toEqual([
       "OpenAI Official",
       "302.AI",
+      "OpenAI API",
     ]);
     const p = codexProviderPresets.find((x) => x.name === "302.AI")!;
     expect(p.config).toContain('base_url = "https://api.302.ai/v1"');
     expect(p.apiFormat).toBe("openai_chat");
     expect(p.auth).toHaveProperty("OPENAI_API_KEY", "");
+
+    const direct = codexProviderPresets.find((x) => x.name === "OpenAI API")!;
+    expect(direct.config).toContain('base_url = "https://api.openai.com/v1"');
+    expect(direct.apiFormat).toBe("openai_responses");
+    expect(direct.category).toBe("custom");
+    expect(direct.auth).toHaveProperty("OPENAI_API_KEY", "");
   });
 
   it("Gemini: official + 302.AI + custom template", () => {

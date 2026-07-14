@@ -135,4 +135,22 @@ export const codexProviderPresets: CodexProviderPreset[] = [
     icon: "ai302",
     iconColor: "#7C3AED",
   },
+  {
+    // OpenAI 官方直连 API：真实 sk-... Key，按量计费，走原生 Responses 接口
+    // （不需要像 302.AI 那样本地转换成 Chat Completions）。跟"OpenAI Official"
+    // （订阅登录）是两码事，分开一张卡，避免和订阅账号混在一起。
+    name: "OpenAI API",
+    websiteUrl: "https://platform.openai.com",
+    apiKeyUrl: "https://platform.openai.com/api-keys",
+    auth: generateThirdPartyAuth(""),
+    config: generateThirdPartyConfig("openai-api", "https://api.openai.com/v1"),
+    endpointCandidates: ["https://api.openai.com/v1"],
+    apiFormat: "openai_responses",
+    modelCatalog: modelCatalog([
+      { model: "gpt-5.5", displayName: "GPT-5.5", contextWindow: 400000 },
+    ]),
+    category: "custom",
+    icon: "openai",
+    iconColor: "#00A67E",
+  },
 ];
