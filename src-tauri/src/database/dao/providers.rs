@@ -929,7 +929,7 @@ mod ensure_official_seed_tests {
     }
 
     #[test]
-    fn ai302_codex_seed_sets_chat_format_metadata() {
+    fn ai302_codex_seed_sets_responses_format_metadata() {
         let db = Database::memory().expect("memory db");
         assert_eq!(db.init_ai302_providers().expect("seed"), 8);
 
@@ -939,7 +939,7 @@ mod ensure_official_seed_tests {
             .expect("codex seed");
         assert_eq!(
             provider.meta.and_then(|meta| meta.api_format),
-            Some("openai_chat".to_string())
+            Some("openai_responses".to_string())
         );
 
         let domestic = db
@@ -953,7 +953,7 @@ mod ensure_official_seed_tests {
         );
         assert_eq!(
             domestic.meta.and_then(|meta| meta.api_format),
-            Some("openai_chat".to_string())
+            Some("openai_responses".to_string())
         );
     }
 
@@ -1022,15 +1022,16 @@ mod ensure_official_seed_tests {
                 .meta
                 .as_ref()
                 .and_then(|meta| meta.api_format.as_deref()),
-            Some("openai_chat")
+            Some("openai_responses")
         );
         assert_eq!(
             repaired.settings_config["auth"]["OPENAI_API_KEY"].as_str(),
             Some("preserved-key")
         );
 
+        // 用户显式改成 openai_chat（旧机器就是这个形态），repair 不许覆盖
         let mut explicit = repaired;
-        explicit.meta.as_mut().expect("meta").api_format = Some("openai_responses".to_string());
+        explicit.meta.as_mut().expect("meta").api_format = Some("openai_chat".to_string());
         db.save_provider(AppType::Codex.as_str(), &explicit)
             .expect("save explicit format");
         db.init_ai302_providers().expect("repeat repair");
@@ -1041,7 +1042,7 @@ mod ensure_official_seed_tests {
             .expect("explicit provider");
         assert_eq!(
             after.meta.and_then(|meta| meta.api_format),
-            Some("openai_responses".to_string()),
+            Some("openai_chat".to_string()),
             "explicit user format must not be overwritten"
         );
     }

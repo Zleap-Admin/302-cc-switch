@@ -131,13 +131,14 @@ pub(crate) const AI302_SEEDS: &[BuiltinProviderSeed] = &[
         icon: "ai302",
         icon_color: "#7C3AED",
         category: "aggregator",
-        // config.toml 等价于前端 generateThirdPartyConfig("302ai", "https://api.302.ai/v1")
-        // 的输出；wire_api="responses" 是 Codex 本地协议，api_format 则声明 302 上游
-        // 使用 Chat Completions，二者共同启用本地 Responses→Chat 转换。
+        // config.toml 等价于前端 generateThirdPartyConfig("302ai",
+        // "https://api.302.ai/codex/v1") 的输出；/codex/v1 是 302 的 Codex 专用
+        // 原生 Responses 端点，直连透传（api_format="openai_responses"），
+        // 不再走本地 Responses→Chat 转换。
         // 不写 model 行 = 自动路由：跟随 Codex 客户端按任务自选模型（sol / mini 等），
         // 302 按实际收到的模型 id 计费。钉死 gpt-5.5 会和真实调用对不上。
-        settings_config_json: r#"{"auth":{"OPENAI_API_KEY":""},"config":"model_provider = \"custom\"\nmodel_reasoning_effort = \"high\"\ndisable_response_storage = true\n\n[model_providers.custom]\nname = \"302ai\"\nbase_url = \"https://api.302.ai/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true"}"#,
-        api_format: Some("openai_chat"),
+        settings_config_json: r#"{"auth":{"OPENAI_API_KEY":""},"config":"model_provider = \"custom\"\nmodel_reasoning_effort = \"high\"\ndisable_response_storage = true\n\n[model_providers.custom]\nname = \"302ai\"\nbase_url = \"https://api.302.ai/codex/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true"}"#,
+        api_format: Some("openai_responses"),
     },
     BuiltinProviderSeed {
         id: "ai302-gemini",
@@ -181,8 +182,8 @@ pub(crate) const AI302_SEEDS: &[BuiltinProviderSeed] = &[
         icon: "ai302",
         icon_color: "#7C3AED",
         category: "aggregator",
-        settings_config_json: r#"{"auth":{"OPENAI_API_KEY":""},"config":"model_provider = \"custom\"\nmodel_reasoning_effort = \"high\"\ndisable_response_storage = true\n\n[model_providers.custom]\nname = \"302ai-cn\"\nbase_url = \"https://api.302ai.cn/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true"}"#,
-        api_format: Some("openai_chat"),
+        settings_config_json: r#"{"auth":{"OPENAI_API_KEY":""},"config":"model_provider = \"custom\"\nmodel_reasoning_effort = \"high\"\ndisable_response_storage = true\n\n[model_providers.custom]\nname = \"302ai-cn\"\nbase_url = \"https://api.302ai.cn/codex/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true"}"#,
+        api_format: Some("openai_responses"),
     },
     BuiltinProviderSeed {
         id: "ai302-cn-gemini",
@@ -316,13 +317,13 @@ mod tests {
             .expect("codex json");
         let toml = config["config"].as_str().expect("codex config string");
         assert!(toml.contains("wire_api = \"responses\""));
-        assert!(toml.contains("base_url = \"https://api.302.ai/v1\""));
+        assert!(toml.contains("base_url = \"https://api.302.ai/codex/v1\""));
         // 自动路由：种子不得钉死 model，Codex 客户端按任务自选
         assert!(!toml.contains("\nmodel = "));
         assert!(!toml.starts_with("model = "));
         assert!(toml.contains("model_reasoning_effort = \"high\""));
         assert_eq!(config["auth"]["OPENAI_API_KEY"].as_str(), Some(""));
-        assert_eq!(codex.api_format, Some("openai_chat"));
+        assert_eq!(codex.api_format, Some("openai_responses"));
 
         let domestic_codex = AI302_SEEDS
             .iter()
@@ -334,8 +335,8 @@ mod tests {
         let domestic_toml = domestic_config["config"]
             .as_str()
             .expect("domestic codex config string");
-        assert!(domestic_toml.contains("base_url = \"https://api.302ai.cn/v1\""));
-        assert_eq!(domestic_codex.api_format, Some("openai_chat"));
+        assert!(domestic_toml.contains("base_url = \"https://api.302ai.cn/codex/v1\""));
+        assert_eq!(domestic_codex.api_format, Some("openai_responses"));
 
         let desktop = AI302_SEEDS
             .iter()

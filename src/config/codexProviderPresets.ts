@@ -121,18 +121,21 @@ export const codexProviderPresets: CodexProviderPreset[] = [
     iconColor: "#00A67E",
   },
   {
-    // 302.AI 的 OpenAI 兼容层：把 api.openai.com 换成 api.302.ai 即可。
-    // 走 openai_chat（本地 Responses→Chat 转换），因为 302 官方示例只承诺
-    // /v1/chat/completions；国内节点 api.302ai.cn 在地址管理里可切换。
+    // 302.AI 的 Codex 专用端点（/codex/v1/responses，原生 Responses 协议）：
+    // 直连，不需要本地 Responses→Chat 转换（openai_responses = 原生透传）。
+    // 国内节点 api.302ai.cn 在地址管理里可切换。
     // 不钉 model、不带 modelCatalog = 自动路由：Codex 保留自己的模型列表，
     // 按任务自选（sol / mini 等），302 按实际收到的模型 id 计费。
     name: "302.AI",
     websiteUrl: "https://302.ai",
     apiKeyUrl: "https://302.ai",
     auth: generateThirdPartyAuth(""),
-    config: generateThirdPartyConfig("302ai", "https://api.302.ai/v1", null),
-    endpointCandidates: ["https://api.302.ai/v1", "https://api.302ai.cn/v1"],
-    apiFormat: "openai_chat",
+    config: generateThirdPartyConfig("302ai", "https://api.302.ai/codex/v1", null),
+    endpointCandidates: [
+      "https://api.302.ai/codex/v1",
+      "https://api.302ai.cn/codex/v1",
+    ],
+    apiFormat: "openai_responses",
     category: "aggregator",
     icon: "ai302",
     iconColor: "#7C3AED",

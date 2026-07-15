@@ -231,6 +231,26 @@
   躺着主理人自己一大块（`FirstRunNoticeDialog.tsx` 约 1000+ 行）尚未提交的引导页开发工作——这次
   一并提交，不是只提交这三处小改动。
 
+### ✅ 已改：Codex 302 卡切换到专用直连端点（2026-07-15）
+
+主理人问「需要路由」徽章从哪来——排查后发现 Codex 的 302 种子/预设一直走的是通用 OpenAI
+兼容层 `api.302.ai/v1`（只承诺 chat/completions），所以标了 `apiFormat="openai_chat"`
+启用本地 Responses→Chat 转换，徽章就是这个标记的 UI 提示。经老板确认，302 有 Codex 专用的
+原生 Responses 端点，应该直连：
+
+- **事实源**：官方文档「Responses（For Codex CLI only）」https://doc.302.ai/359389143e0 ，
+  端点 `https://api.302.ai/codex/v1/responses`（国内 `api.302ai.cn` 同路径），官方 API 3 折
+  计费、支持缓存命中。文档页标了 deprecated，但老板拍板用这个。
+- **改动**：`codexProviderPresets.ts` 的 302.AI 预设 + `providers_seed.rs` 两张 Codex 种子卡，
+  base_url 改 `…/codex/v1`，`apiFormat` 改 `openai_responses`（原生透传，不再本地转换，
+  「需要路由」徽章随之消失）。
+- **连带**：`Ai302KeyDialog` 验证 key 时剥掉 `/codex/v1` 后缀退回通用层（专用端点不提供
+  `/models`）；`ai302.ts` 的 codex base URL fallback 同步更新。
+- **旧机器**：老板明确说不管（全员重新下载）。repair 逻辑只补缺失值，旧卡的 `openai_chat` +
+  旧地址原样保留，本地转换代码路径未删，旧安装照常工作。
+- 验证：`tsc --noEmit` ✓；`vitest` 375/375 ✓；`cargo test --lib` 1785/1785 ✓。
+  **真 key 实跑 Codex 未做**（无 key），归入上方「真 key 全链路」待办。
+
 ### 产品 polish 方向（2026-07-14 讨论）
 
 1. **官方配置一致性检查**：在设置里提供手动检查入口，确认 Claude/Codex/Gemini/Claude Desktop 的
@@ -473,3 +493,28 @@ first-run setup flow). Confirmed and fixed each:
   carried a large chunk (~1000+ lines in `FirstRunNoticeDialog.tsx`) of the owner's own
   not-yet-committed onboarding work — this commit includes all of it, not just the three
   fixes above.
+
+### ✅ Changed: Codex 302 cards now use the dedicated direct-connect endpoint (2026-07-15)
+
+The owner asked where the "需要路由" (needs routing) badge came from. Root cause: the Codex
+302 seed/preset pointed at the generic OpenAI-compat layer `api.302.ai/v1` (chat/completions
+only), so it was tagged `apiFormat="openai_chat"` to enable the local Responses→Chat
+conversion — the badge is that tag's UI hint. The boss confirmed 302 has a Codex-only native
+Responses endpoint and it should be direct:
+
+- **Source of truth**: official doc "Responses (For Codex CLI only)"
+  https://doc.302.ai/359389143e0 — endpoint `https://api.302.ai/codex/v1/responses`
+  (`api.302ai.cn` same path for the domestic node), billed at 30% of the official API price
+  with cache-hit support. The doc page is flagged deprecated, but the boss signed off on it.
+- **Change**: the 302.AI preset in `codexProviderPresets.ts` + both Codex seeds in
+  `providers_seed.rs`: base_url → `…/codex/v1`, `apiFormat` → `openai_responses` (native
+  passthrough, no local conversion; the routing badge disappears with it).
+- **Fallout handled**: `Ai302KeyDialog` strips the `/codex/v1` suffix before key
+  verification (the dedicated endpoint doesn't serve `/models`); the codex base-URL fallback
+  in `ai302.ts` updated to match.
+- **Old installs**: boss explicitly said don't bother (everyone re-downloads). The repair
+  logic only fills missing values, so legacy cards keep `openai_chat` + the old base URL, and
+  the local conversion code path stays in place — old installs keep working.
+- Verified: `tsc --noEmit` clean; `vitest` 375/375; `cargo test --lib` 1785/1785.
+  **No real-key end-to-end Codex run yet** (no key on hand) — tracked under the existing
+  "real-key full-chain" TODO.

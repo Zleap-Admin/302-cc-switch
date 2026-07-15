@@ -86,7 +86,7 @@ export function readAi302BaseUrl(
   if (appId === "codex") {
     const toml = typeof config.config === "string" ? config.config : "";
     const match = toml.match(/^\s*base_url\s*=\s*["']([^"']+)["']/m);
-    return match?.[1] || `${AI302_API_BASE_URL}/v1`;
+    return match?.[1] || `${AI302_API_BASE_URL}/codex/v1`;
   }
   const env = config.env as Record<string, unknown> | undefined;
   const field =

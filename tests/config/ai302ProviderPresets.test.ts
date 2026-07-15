@@ -37,9 +37,10 @@ describe("302.AI presets across apps", () => {
       "302.AI",
       "OpenAI API",
     ]);
+    // 302 的 Codex 专用端点（/codex/v1）走原生 Responses，直连不转换
     const p = codexProviderPresets.find((x) => x.name === "302.AI")!;
-    expect(p.config).toContain('base_url = "https://api.302.ai/v1"');
-    expect(p.apiFormat).toBe("openai_chat");
+    expect(p.config).toContain('base_url = "https://api.302.ai/codex/v1"');
+    expect(p.apiFormat).toBe("openai_responses");
     expect(p.auth).toHaveProperty("OPENAI_API_KEY", "");
 
     const direct = codexProviderPresets.find((x) => x.name === "OpenAI API")!;
