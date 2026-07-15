@@ -50,6 +50,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: "1.95"
           targets: ${{ matrix.target }}
 
       - name: Install frontend dependencies
@@ -80,10 +81,12 @@ jobs:
           OUTPUT_NAME: ${{ matrix.output_name }}
         run: |
           $ErrorActionPreference = 'Stop'
+          $configPath = Join-Path $env:RUNNER_TEMP 'tauri.package.conf.json'
+          '{"bundle":{"createUpdaterArtifacts":false}}' | Set-Content -Path $configPath -Encoding utf8
           pnpm tauri build `
             --target $env:TARGET `
             --bundles nsis `
-            --config '{"bundle":{"createUpdaterArtifacts":false}}'
+            --config $configPath
           New-Item -ItemType Directory -Force -Path release-assets | Out-Null
           $bundleDir = "src-tauri/target/$env:TARGET/release/bundle/nsis"
           $installer = Get-ChildItem -Path $bundleDir -File -Filter '*.exe' | Select-Object -First 1
