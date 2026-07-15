@@ -1,0 +1,101 @@
+name: Package three desktop builds
+
+on:
+  push:
+    branches:
+      - build/package-3.16.6-20260716
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS Apple Silicon
+            os: macos-14
+            target: aarch64-apple-darwin
+            artifact: macos-arm64
+            output_name: 302-CC-Switch_3.16.6_macOS_Apple-Silicon.dmg
+          - label: macOS Intel
+            os: macos-14
+            target: x86_64-apple-darwin
+            artifact: macos-intel
+            output_name: 302-CC-Switch_3.16.6_macOS_Intel.dmg
+          - label: Windows x64
+            os: windows-2022
+            target: x86_64-pc-windows-msvc
+            artifact: windows-x64
+            output_name: 302-CC-Switch_3.16.6_Windows_x64_Setup.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.12.3
+          run_install: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build macOS DMG
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          OUTPUT_NAME: ${{ matrix.output_name }}
+        run: |
+          set -euo pipefail
+          pnpm tauri build \
+            --target "$TARGET" \
+            --bundles dmg \
+            --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          mkdir -p release-assets
+          dmg=$(find "src-tauri/target/$TARGET/release/bundle/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)
+          test -n "$dmg"
+          cp "$dmg" "release-assets/$OUTPUT_NAME"
+
+      - name: Build Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+          OUTPUT_NAME: ${{ matrix.output_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          pnpm tauri build `
+            --target $env:TARGET `
+            --bundles nsis `
+            --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
+          $bundleDir = "src-tauri/target/$env:TARGET/release/bundle/nsis"
+          $installer = Get-ChildItem -Path $bundleDir -File -Filter '*.exe' | Select-Object -First 1
+          if ($null -eq $installer) {
+            throw "No NSIS installer found under $bundleDir"
+          }
+          Copy-Item $installer.FullName "release-assets/$env:OUTPUT_NAME"
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: release-assets/${{ matrix.output_name }}
+          if-no-files-found: error
+          retention-days: 3
