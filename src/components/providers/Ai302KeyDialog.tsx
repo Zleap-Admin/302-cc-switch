@@ -117,10 +117,7 @@ export function Ai302KeyDialog({
     }
     setVerify({ status: "loading" });
     try {
-      // Codex 专用端点 /codex/v1 只服务 Responses 请求，不提供 /models；
-      // 验证 key 时剥掉该后缀，退回同域名的通用 OpenAI 兼容层（key 是账号级的）
-      const verifyBaseUrl = baseUrl.replace(/\/codex\/v1$/, "");
-      const models = await fetchModelsForConfig(verifyBaseUrl, trimmed);
+      const models = await fetchModelsForConfig(baseUrl, trimmed);
       setVerify({ status: "ok", modelCount: models.length });
     } catch (err) {
       const msg = String(err);

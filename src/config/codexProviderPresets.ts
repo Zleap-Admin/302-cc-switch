@@ -57,6 +57,7 @@ export function generateThirdPartyConfig(
   providerName: string,
   baseUrl: string,
   modelName: string | null = "gpt-5.5",
+  requiresOpenAiAuth = true,
 ): string {
   const tomlString = (value: string) => JSON.stringify(value);
   const modelLine = modelName ? `model = ${tomlString(modelName)}\n` : "";
@@ -69,7 +70,7 @@ disable_response_storage = true
 name = ${tomlString(providerName)}
 base_url = ${tomlString(baseUrl)}
 wire_api = "responses"
-requires_openai_auth = true`;
+requires_openai_auth = ${requiresOpenAiAuth}`;
 }
 
 function modelCatalog(
@@ -121,9 +122,8 @@ export const codexProviderPresets: CodexProviderPreset[] = [
     iconColor: "#00A67E",
   },
   {
-    // 302.AI 的 Codex 专用端点（/codex/v1/responses，原生 Responses 协议）：
-    // 直连，不需要本地 Responses→Chat 转换（openai_responses = 原生透传）。
-    // 国内节点 api.302ai.cn 在地址管理里可切换。
+    // 302.AI 的海外、国内 Codex Responses 节点都直接使用 /v1。
+    // 两者都直连，不需要本地 Responses→Chat 转换（openai_responses = 原生透传）。
     // 不钉 model、不带 modelCatalog = 自动路由：Codex 保留自己的模型列表，
     // 按任务自选（sol / mini 等），302 按实际收到的模型 id 计费。
     name: "302.AI",
@@ -132,13 +132,11 @@ export const codexProviderPresets: CodexProviderPreset[] = [
     auth: generateThirdPartyAuth(""),
     config: generateThirdPartyConfig(
       "302ai",
-      "https://api.302.ai/codex/v1",
+      "https://api.302.ai/v1",
       null,
+      false,
     ),
-    endpointCandidates: [
-      "https://api.302.ai/codex/v1",
-      "https://api.302ai.cn/codex/v1",
-    ],
+    endpointCandidates: ["https://api.302.ai/v1", "https://api.302ai.cn/v1"],
     apiFormat: "openai_responses",
     category: "aggregator",
     icon: "ai302",

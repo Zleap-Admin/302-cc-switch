@@ -663,22 +663,14 @@ impl Database {
 
     /// 启动时调用：补齐 302.AI 聚合供应商（无 key 占位）。
     ///
-    /// `ai302_regional_providers_seeded` 是国内 / 海外双卡的版本化补种标记。
-    /// 旧版本只有 `ai302_providers_seeded`，所以不能继续用旧标记提前返回，否则升级
-    /// 用户看不到新增的国内卡片。新标记写入后仍只做轻量元数据修复。
+    /// 每次启动都按固定 id 扫描缺失项，而不是靠历史 flag 提前返回。这样新增支持
+    /// OpenCode / OpenClaw / Hermes 时，已经写过区域种子 flag 的老数据库也能补齐。
+    /// 扫描只有少量主键查询，已有条目不会覆盖用户配置。
     ///
     /// 302 种子 id 全部在 `is_builtin_seed_id` 覆盖范围内，因此不会被
     /// `has_non_official_seed_provider` 当成「用户自建第三方」而挡住 live 导入。
     pub fn init_ai302_providers(&self) -> Result<usize, AppError> {
         use crate::database::dao::providers_seed::AI302_SEEDS;
-
-        if self
-            .get_bool_flag("ai302_regional_providers_seeded")
-            .unwrap_or(false)
-        {
-            self.repair_ai302_providers()?;
-            return Ok(0);
-        }
 
         let mut inserted = 0_usize;
         let now_ms = chrono::Utc::now().timestamp_millis();
@@ -716,7 +708,7 @@ impl Database {
             log::info!("✓ Seeded 302.AI provider: {} ({})", seed.name, app_type_str);
         }
 
-        // 兼容仍读取旧标记的历史版本，同时记录双区域卡片已补种。
+        // 兼容仍读取旧标记的历史版本；当前版本不再用 flag 跳过缺失项扫描。
         self.set_setting("ai302_providers_seeded", "true")?;
         self.set_setting("ai302_regional_providers_seeded", "true")?;
         self.repair_ai302_providers()?;
@@ -726,7 +718,7 @@ impl Database {
 
     /// 补内置卡片缺失的运行时元数据，并把未改动过的旧版单卡名称、网址迁移为
     /// “海外”标识；顺带剥掉旧 Codex 种子钉死的 model = "gpt-5.5" 行（改为自动
-    /// 路由），以及把旧 Codex 种子的通用兼容层地址迁移到 /codex/v1 直连端点。
+    /// 路由），并把旧 Codex 种子的错误出厂端点迁移到 /v1。
     /// 用户自行改过的名称、网址、格式和模型值都不覆盖。
     fn repair_ai302_providers(&self) -> Result<usize, AppError> {
         use crate::app_config::AppType;
@@ -751,10 +743,10 @@ impl Database {
 
             if let Some(api_format) = seed.api_format {
                 let meta = provider.meta.get_or_insert_with(ProviderMeta::default);
-                if !meta
+                if meta
                     .api_format
                     .as_deref()
-                    .is_some_and(|value| !value.trim().is_empty())
+                    .is_none_or(|value| value.trim().is_empty())
                 {
                     meta.api_format = Some(api_format.to_string());
                     changed = true;
@@ -782,49 +774,26 @@ impl Database {
                     }
                 }
 
-                // 旧版 Codex 种子走通用兼容层（/v1 + openai_chat 本地转换），
-                // 现在切到 302 的 Codex 专用直连端点（/codex/v1 + openai_responses）。
-                // 只迁移与旧默认逐字相同的 base_url 行——用户自定义的地址不碰；
-                // 迁移地址时才顺带升级格式标记（用户显式设置的其他格式不覆盖，
-                // 但旧默认 openai_chat 属于出厂形态，要跟地址一起升级）。
-                let (legacy_base_line, new_base_line) = if seed.id == "ai302-cn-codex" {
-                    (
-                        "base_url = \"https://api.302ai.cn/v1\"",
-                        "base_url = \"https://api.302ai.cn/codex/v1\"",
-                    )
-                } else {
-                    (
-                        "base_url = \"https://api.302.ai/v1\"",
-                        "base_url = \"https://api.302.ai/codex/v1\"",
-                    )
-                };
                 if let Some(config_text) = provider
                     .settings_config
                     .get("config")
                     .and_then(|value| value.as_str())
+                    .map(str::to_string)
                 {
-                    if config_text
-                        .lines()
-                        .any(|line| line.trim() == legacy_base_line)
-                    {
-                        let migrated: Vec<String> = config_text
-                            .lines()
-                            .map(|line| {
-                                if line.trim() == legacy_base_line {
-                                    line.replace(legacy_base_line, new_base_line)
-                                } else {
-                                    line.to_string()
-                                }
-                            })
-                            .collect();
-                        provider.settings_config["config"] =
-                            serde_json::Value::String(migrated.join("\n"));
-
-                        let meta = provider.meta.get_or_insert_with(ProviderMeta::default);
-                        if meta.api_format.as_deref() == Some("openai_chat") {
-                            meta.api_format = Some("openai_responses".to_string());
+                    match crate::codex_config::repair_ai302_codex_auth_routing(
+                        &config_text,
+                        None,
+                    ) {
+                        Ok(Some(repaired)) => {
+                            provider.settings_config["config"] =
+                                serde_json::Value::String(repaired);
+                            changed = true;
                         }
-                        changed = true;
+                        Ok(None) => {}
+                        Err(error) => log::warn!(
+                            "Skipping malformed Codex config while repairing 302.AI auth ({}): {error}",
+                            provider.id
+                        ),
                     }
                 }
             }
@@ -834,9 +803,106 @@ impl Database {
                 repaired += 1;
             }
         }
+        repaired += self.repair_ai302_codex_endpoints()?;
         if repaired > 0 {
             log::info!("✓ Repaired {repaired} 302.AI provider(s)");
         }
+        Ok(repaired)
+    }
+
+    /// 旧版允许在同一张 302 Codex 卡上切换国内/海外节点，所以不能只按内置卡 id
+    /// 修复。扫描全部 Codex 卡片及地址候选表，精确迁移错误发布的 302.AI URL。
+    fn repair_ai302_codex_endpoints(&self) -> Result<usize, AppError> {
+        use crate::app_config::AppType;
+        use crate::codex_config::{
+            corrected_ai302_codex_base_url, repair_ai302_codex_auth_routing,
+            repair_ai302_codex_base_urls,
+        };
+
+        let app_type = AppType::Codex.as_str();
+        let providers = self.get_all_providers(app_type)?;
+        let mut repaired = 0_usize;
+
+        for (_, mut provider) in providers {
+            let Some(config_text) = provider
+                .settings_config
+                .get("config")
+                .and_then(|value| value.as_str())
+            else {
+                continue;
+            };
+
+            let mut migrated = config_text.to_string();
+            let mut changed = false;
+
+            match repair_ai302_codex_base_urls(&migrated) {
+                Ok(Some(next)) => {
+                    migrated = next;
+                    changed = true;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    log::warn!(
+                        "Skipping malformed Codex config while repairing 302.AI endpoint ({}): {error}",
+                        provider.id
+                    );
+                    continue;
+                }
+            }
+
+            match repair_ai302_codex_auth_routing(&migrated, None) {
+                Ok(Some(next)) => {
+                    migrated = next;
+                    changed = true;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    log::warn!(
+                        "Skipping malformed Codex config while repairing 302.AI auth ({}): {error}",
+                        provider.id
+                    );
+                    continue;
+                }
+            }
+
+            if !changed {
+                continue;
+            }
+
+            provider.settings_config["config"] = serde_json::Value::String(migrated);
+            self.save_provider(app_type, &provider)?;
+            repaired += 1;
+        }
+
+        let conn = lock_conn!(self.conn);
+        let endpoint_candidates = {
+            let mut stmt = conn
+                .prepare("SELECT id, url FROM provider_endpoints WHERE app_type = ?1")
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            let rows = stmt
+                .query_map(params![app_type], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| AppError::Database(e.to_string()))?
+        };
+        let mut endpoint_rows = 0;
+        for (id, url) in endpoint_candidates {
+            let Some(current) = corrected_ai302_codex_base_url(&url) else {
+                continue;
+            };
+            endpoint_rows += conn
+                .execute(
+                    "UPDATE provider_endpoints SET url = ?1 WHERE id = ?2",
+                    params![current, id],
+                )
+                .map_err(|e| AppError::Database(e.to_string()))?;
+        }
+        if endpoint_rows > 0 {
+            log::info!("✓ Repaired {endpoint_rows} legacy 302.AI Codex endpoint candidate(s)");
+        }
+
         Ok(repaired)
     }
 
@@ -902,6 +968,11 @@ impl Database {
 mod ensure_official_seed_tests {
     use crate::app_config::AppType;
     use crate::database::{Database, CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID};
+    use crate::provider::Provider;
+
+    fn legacy_ai302_codex_url(api_root: &str) -> String {
+        format!("{api_root}/{}/v1", "codex")
+    }
 
     #[test]
     fn ensure_inserts_when_missing() {
@@ -978,7 +1049,7 @@ mod ensure_official_seed_tests {
     #[test]
     fn ai302_codex_seed_sets_responses_format_metadata() {
         let db = Database::memory().expect("memory db");
-        assert_eq!(db.init_ai302_providers().expect("seed"), 8);
+        assert_eq!(db.init_ai302_providers().expect("seed"), 11);
 
         let provider = db
             .get_provider_by_id("ai302-codex", AppType::Codex.as_str())
@@ -1010,7 +1081,7 @@ mod ensure_official_seed_tests {
         db.set_setting("ai302_providers_seeded", "true")
             .expect("set legacy flag");
 
-        assert_eq!(db.init_ai302_providers().expect("regional upgrade"), 8);
+        assert_eq!(db.init_ai302_providers().expect("regional upgrade"), 11);
         assert!(db
             .get_provider_by_id("ai302-cn-claude", AppType::Claude.as_str())
             .expect("query domestic provider")
@@ -1019,6 +1090,36 @@ mod ensure_official_seed_tests {
             .get_bool_flag("ai302_regional_providers_seeded")
             .expect("read regional flag"));
         assert_eq!(db.init_ai302_providers().expect("repeat init"), 0);
+    }
+
+    #[test]
+    fn ai302_seed_init_backfills_additive_apps_after_flag_is_set() {
+        let db = Database::memory().expect("memory db");
+        db.init_ai302_providers().expect("seed all apps");
+
+        for (app_type, id) in [
+            (AppType::OpenCode, "ai302-cn-opencode"),
+            (AppType::OpenClaw, "ai302-cn-openclaw"),
+            (AppType::Hermes, "ai302-cn-hermes"),
+        ] {
+            db.delete_provider(app_type.as_str(), id)
+                .expect("simulate older seeded database");
+        }
+
+        assert_eq!(
+            db.init_ai302_providers().expect("backfill additive apps"),
+            3
+        );
+        for (app_type, id) in [
+            (AppType::OpenCode, "ai302-cn-opencode"),
+            (AppType::OpenClaw, "ai302-cn-openclaw"),
+            (AppType::Hermes, "ai302-cn-hermes"),
+        ] {
+            assert!(db
+                .get_provider_by_id(id, app_type.as_str())
+                .expect("query additive seed")
+                .is_some());
+        }
     }
 
     #[test]
@@ -1094,27 +1195,28 @@ mod ensure_official_seed_tests {
         );
     }
 
-    /// 旧安装的 Codex 种子还是「通用兼容层 + 本地转换」的出厂形态
-    /// （/v1 地址 + openai_chat），repair 要整体迁移到 /codex/v1 直连；
+    /// 已发布版本曾把海外地址错误写成 /codex/v1，repair 要改回 /v1；
     /// 用户自定义的地址必须原样保留。
     #[test]
-    fn ai302_seed_repair_migrates_legacy_codex_endpoint() {
+    fn ai302_seed_repair_corrects_legacy_overseas_codex_endpoint() {
         let db = Database::memory().expect("memory db");
         db.init_ai302_providers().expect("seed");
+        let legacy_url = legacy_ai302_codex_url("https://api.302.ai");
 
-        // 模拟旧机器上的出厂形态：旧地址 + openai_chat + 用户已填的 key
+        // 模拟错误版本的出厂形态：/codex/v1 + 用户已填的 key
         let mut provider = db
             .get_provider_by_id("ai302-codex", AppType::Codex.as_str())
             .expect("query")
             .expect("codex seed");
-        provider.settings_config["config"] = serde_json::Value::String(
-            "model_provider = \"custom\"\nmodel_reasoning_effort = \"high\"\ndisable_response_storage = true\n\n[model_providers.custom]\nname = \"302ai\"\nbase_url = \"https://api.302.ai/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true".to_string(),
-        );
+        provider.settings_config["config"] = serde_json::Value::String(format!(
+            "model_provider = \"custom\"\nmodel_reasoning_effort = \"high\"\ndisable_response_storage = true\n\n[model_providers.custom]\nname = \"302ai\"\nbase_url = \"{legacy_url}\"\nwire_api = \"responses\"\nrequires_openai_auth = true"
+        ));
         provider.settings_config["auth"]["OPENAI_API_KEY"] =
             serde_json::Value::String("user-key".to_string());
-        provider.meta.as_mut().expect("meta").api_format = Some("openai_chat".to_string());
         db.save_provider(AppType::Codex.as_str(), &provider)
-            .expect("save legacy shape");
+            .expect("save bad shipped endpoint");
+        db.add_custom_endpoint(AppType::Codex.as_str(), "ai302-codex", &legacy_url)
+            .expect("save legacy endpoint candidate");
 
         assert_eq!(db.init_ai302_providers().expect("repair"), 0);
         let repaired = db
@@ -1122,8 +1224,9 @@ mod ensure_official_seed_tests {
             .expect("query repaired")
             .expect("repaired provider");
         let config = repaired.settings_config["config"].as_str().expect("toml");
-        assert!(config.contains("base_url = \"https://api.302.ai/codex/v1\""));
-        assert!(!config.contains("base_url = \"https://api.302.ai/v1\""));
+        assert!(config.contains("base_url = \"https://api.302.ai/v1\""));
+        assert!(!config.contains(&legacy_url));
+        assert!(config.contains("requires_openai_auth = false"));
         assert_eq!(
             repaired
                 .meta
@@ -1135,6 +1238,16 @@ mod ensure_official_seed_tests {
             repaired.settings_config["auth"]["OPENAI_API_KEY"].as_str(),
             Some("user-key")
         );
+        let providers = db
+            .get_all_providers(AppType::Codex.as_str())
+            .expect("list providers");
+        let endpoints = &providers["ai302-codex"]
+            .meta
+            .as_ref()
+            .expect("meta")
+            .custom_endpoints;
+        assert!(endpoints.contains_key("https://api.302.ai/v1"));
+        assert!(!endpoints.contains_key(&legacy_url));
 
         // 用户自定义的地址不是旧默认值，repair 不许碰（格式也保持用户的选择）
         let mut custom = repaired;
@@ -1157,6 +1270,120 @@ mod ensure_official_seed_tests {
         assert_eq!(
             after.meta.and_then(|meta| meta.api_format),
             Some("openai_chat".to_string())
+        );
+    }
+
+    /// 国内 Codex 卡曾错误使用 /codex/v1；启动 repair 必须改回 /v1，
+    /// 同时保留用户已经填写的 Key 和原生 Responses 格式。
+    #[test]
+    fn ai302_seed_repair_corrects_domestic_codex_endpoint() {
+        let db = Database::memory().expect("memory db");
+        db.init_ai302_providers().expect("seed");
+        let legacy_url = legacy_ai302_codex_url("https://api.302ai.cn");
+
+        let mut provider = db
+            .get_provider_by_id("ai302-cn-codex", AppType::Codex.as_str())
+            .expect("query")
+            .expect("domestic codex seed");
+        provider.settings_config["config"] = serde_json::Value::String(format!(
+            "model_provider = \"custom\"\nmodel_reasoning_effort = \"high\"\ndisable_response_storage = true\n\n[model_providers.custom]\nname = \"302ai-cn\"\nbase_url = \"{legacy_url}\"\nwire_api = \"responses\"\nrequires_openai_auth = true"
+        ));
+        provider.settings_config["auth"]["OPENAI_API_KEY"] =
+            serde_json::Value::String("domestic-key".to_string());
+        db.save_provider(AppType::Codex.as_str(), &provider)
+            .expect("save bad shipped endpoint");
+
+        assert_eq!(db.init_ai302_providers().expect("repair"), 0);
+        let repaired = db
+            .get_provider_by_id("ai302-cn-codex", AppType::Codex.as_str())
+            .expect("query repaired")
+            .expect("repaired domestic provider");
+        let config = repaired.settings_config["config"].as_str().expect("toml");
+        assert!(config.contains("base_url = \"https://api.302ai.cn/v1\""));
+        assert!(!config.contains(&legacy_url));
+        assert!(config.contains("requires_openai_auth = false"));
+        assert_eq!(
+            repaired.settings_config["auth"]["OPENAI_API_KEY"].as_str(),
+            Some("domestic-key")
+        );
+        assert_eq!(
+            repaired.meta.and_then(|meta| meta.api_format),
+            Some("openai_responses".to_string())
+        );
+    }
+
+    /// 旧版只有一张 302 Codex 卡，用户从地址管理切到国内节点后，卡片 id 仍是
+    /// ai302-codex。修复不能只看国内卡 id，还要按实际地址迁移配置和候选端点。
+    #[test]
+    fn ai302_seed_repair_corrects_domestic_endpoint_on_legacy_overseas_card() {
+        let db = Database::memory().expect("memory db");
+        db.init_ai302_providers().expect("seed");
+        let legacy_url = legacy_ai302_codex_url("https://api.302ai.cn");
+
+        let mut provider = db
+            .get_provider_by_id("ai302-codex", AppType::Codex.as_str())
+            .expect("query")
+            .expect("legacy 302 codex card");
+        provider.settings_config["config"] = serde_json::Value::String(format!(
+            "model_provider = \"custom\"\nmodel_reasoning_effort = \"high\"\n\n[model_providers.custom]\nname = \"302ai\"\nbase_url = \"{legacy_url}\"\nwire_api = \"responses\"\nrequires_openai_auth = true"
+        ));
+        db.save_provider(AppType::Codex.as_str(), &provider)
+            .expect("save selected domestic endpoint");
+        db.add_custom_endpoint(AppType::Codex.as_str(), "ai302-codex", &legacy_url)
+            .expect("save legacy endpoint candidate");
+
+        db.init_ai302_providers().expect("repair");
+
+        let repaired = db
+            .get_provider_by_id("ai302-codex", AppType::Codex.as_str())
+            .expect("query repaired")
+            .expect("repaired provider");
+        let config = repaired.settings_config["config"].as_str().expect("toml");
+        assert!(config.contains("base_url = \"https://api.302ai.cn/v1\""));
+        assert!(!config.contains(&legacy_url));
+        assert!(config.contains("requires_openai_auth = false"));
+
+        let providers = db
+            .get_all_providers(AppType::Codex.as_str())
+            .expect("list providers");
+        let endpoints = &providers["ai302-codex"]
+            .meta
+            .as_ref()
+            .expect("meta")
+            .custom_endpoints;
+        assert!(endpoints.contains_key("https://api.302ai.cn/v1"));
+        assert!(!endpoints.contains_key(&legacy_url));
+    }
+
+    #[test]
+    fn ai302_repair_fixes_auth_routing_on_custom_provider_ids() {
+        let db = Database::memory().expect("memory db");
+        db.init_ai302_providers().expect("seed");
+
+        let mut provider = Provider::with_id(
+            "my-302-provider".to_string(),
+            "My 302".to_string(),
+            serde_json::json!({
+                "auth": {"OPENAI_API_KEY": "custom-key"},
+                "config": "model_provider = \"my302\"\n\n[model_providers.my302]\nname = \"My 302\"\nbase_url = \"https://api.302.ai/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true"
+            }),
+            None,
+        );
+        provider.category = Some("custom".to_string());
+        db.save_provider(AppType::Codex.as_str(), &provider)
+            .expect("save custom provider");
+
+        db.init_ai302_providers().expect("repair");
+
+        let repaired = db
+            .get_provider_by_id("my-302-provider", AppType::Codex.as_str())
+            .expect("query repaired")
+            .expect("custom provider");
+        let config = repaired.settings_config["config"].as_str().expect("toml");
+        assert!(config.contains("requires_openai_auth = false"));
+        assert_eq!(
+            repaired.settings_config["auth"]["OPENAI_API_KEY"].as_str(),
+            Some("custom-key")
         );
     }
 
@@ -1187,8 +1414,9 @@ mod ensure_official_seed_tests {
         let config = repaired.settings_config["config"].as_str().expect("toml");
         assert!(!config.contains("model = \"gpt-5.5\""));
         assert!(config.contains("model_reasoning_effort = \"high\""));
-        // 旧默认 base_url 同时被端点迁移升级成 /codex/v1 直连
-        assert!(config.contains("base_url = \"https://api.302.ai/codex/v1\""));
+        assert!(config.contains("base_url = \"https://api.302.ai/v1\""));
+        assert!(!config.contains("/codex/"));
+        assert!(config.contains("requires_openai_auth = false"));
         assert_eq!(
             repaired.settings_config["auth"]["OPENAI_API_KEY"].as_str(),
             Some("user-key")

@@ -60,6 +60,7 @@ export const geminiProviderPresets: GeminiProviderPreset[] = [
     settingsConfig: {
       env: {
         GOOGLE_GEMINI_BASE_URL: "https://api.302.ai",
+        GEMINI_API_KEY: "",
         GEMINI_MODEL: "gemini-3.5-flash",
       },
     },

@@ -1281,7 +1281,7 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
 
     // Claude 官方登录识别：settings.json 里没有任何第三方接口字段，说明用户
     // 走的是官方 OAuth 登录。此时不落 "default" 供应商（那只会是一张让人困惑的
-    // 空牌），直接跳过——启动编排会在种子就位后把 claude-official 设为当前。
+    // 空牌），直接跳过；启动编排会在种子就位后默认选择 302.AI 国内节点。
     // 与 Codex 的 has_login_material 检测对应；ANTHROPIC_AUTH_TOKEN 也算第三方
     // 凭据（企业网关常用），三个字段任一非空都不算官方。
     if matches!(app_type, AppType::Claude) {
@@ -1351,7 +1351,7 @@ pub fn should_import_default_config_on_startup(
     state: &AppState,
     app_type: &AppType,
 ) -> Result<bool, AppError> {
-    if app_type.is_additive_mode() {
+    if app_type.is_additive_mode() || matches!(app_type, AppType::Codex) {
         return Ok(false);
     }
 

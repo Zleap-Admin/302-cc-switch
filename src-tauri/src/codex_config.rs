@@ -13,6 +13,31 @@ use toml_edit::DocumentMut;
 
 pub const CC_SWITCH_CODEX_MODEL_PROVIDER_ID: &str = "custom";
 pub const CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME: &str = "cc-switch-model-catalog.json";
+pub(crate) const AI302_OVERSEAS_CODEX_BASE_URL: &str = "https://api.302.ai/v1";
+pub(crate) const AI302_DOMESTIC_CODEX_BASE_URL: &str = "https://api.302ai.cn/v1";
+
+/// Recognize the bad path shipped by an earlier build without ever using it as
+/// a configured endpoint. This is intentionally host-and-path based so the app
+/// does not construct a complete invalid 302.AI URL of its own.
+pub(crate) fn corrected_ai302_codex_base_url(value: &str) -> Option<&'static str> {
+    let parsed = url::Url::parse(value.trim()).ok()?;
+    if parsed.scheme() != "https"
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.port().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || parsed.path().trim_end_matches('/') != "/codex/v1"
+    {
+        return None;
+    }
+
+    match parsed.host_str()? {
+        "api.302.ai" => Some(AI302_OVERSEAS_CODEX_BASE_URL),
+        "api.302ai.cn" => Some(AI302_DOMESTIC_CODEX_BASE_URL),
+        _ => None,
+    }
+}
 
 /// Top-level `config.toml` key that controls Codex's built-in web-search tool.
 pub(crate) const CODEX_WEB_SEARCH_FIELD: &str = "web_search";
@@ -297,6 +322,202 @@ pub fn write_codex_live_config_atomic(config_text_opt: Option<&str>) -> Result<(
     }
 
     write_text_file(&config_path, &cfg_text)
+}
+
+/// 修复曾经错误发布的 302.AI Codex 地址，同时保留其余 TOML 内容。
+///
+/// 不只处理当前 provider：旧地址可能残留在任意 `[model_providers.*]` 中，之后切换
+/// provider 时会再次生效，因此所有与旧默认值完全匹配的条目都要迁移。
+pub fn repair_ai302_codex_base_urls(toml_str: &str) -> Result<Option<String>, String> {
+    let mut doc = toml_str
+        .parse::<DocumentMut>()
+        .map_err(|e| format!("TOML parse error: {e}"))?;
+    let mut changed = false;
+
+    let top_level_replacement = doc
+        .get("base_url")
+        .and_then(|item| item.as_str())
+        .and_then(corrected_ai302_codex_base_url);
+    if let Some(replacement) = top_level_replacement {
+        doc["base_url"] = toml_edit::value(replacement);
+        changed = true;
+    }
+
+    if let Some(model_providers) = doc
+        .get_mut("model_providers")
+        .and_then(|item| item.as_table_mut())
+    {
+        for (_, provider) in model_providers.iter_mut() {
+            let Some(provider_table) = provider.as_table_mut() else {
+                continue;
+            };
+            let provider_replacement = provider_table
+                .get("base_url")
+                .and_then(|item| item.as_str())
+                .and_then(corrected_ai302_codex_base_url);
+            if let Some(replacement) = provider_replacement {
+                provider_table["base_url"] = toml_edit::value(replacement);
+                changed = true;
+            }
+        }
+    }
+
+    Ok(changed.then(|| doc.to_string()))
+}
+
+fn is_ai302_codex_base_url(value: &str) -> bool {
+    url::Url::parse(value.trim())
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_string))
+        .is_some_and(|host| host == "api.302.ai" || host == "api.302ai.cn")
+}
+
+/// 302.AI is a custom provider, so its key must be provider-scoped rather than
+/// treated as an OpenAI/ChatGPT login token. Older builds set
+/// `requires_openai_auth = true`, which can make Codex send the user's ChatGPT
+/// token to 302.AI and receive a 401.
+pub(crate) fn repair_ai302_codex_auth_routing(
+    toml_str: &str,
+    active_bearer_token: Option<&str>,
+) -> Result<Option<String>, String> {
+    let mut doc = toml_str
+        .parse::<DocumentMut>()
+        .map_err(|e| format!("TOML parse error: {e}"))?;
+    let active_provider_id = active_codex_model_provider_id(&doc);
+    let bearer_token = active_bearer_token
+        .map(str::trim)
+        .filter(|key| !key.is_empty());
+    let mut changed = false;
+
+    let top_level_is_ai302 = doc
+        .get("base_url")
+        .and_then(|item| item.as_str())
+        .is_some_and(is_ai302_codex_base_url);
+    if top_level_is_ai302 {
+        if doc
+            .get("requires_openai_auth")
+            .and_then(|item| item.as_bool())
+            != Some(false)
+        {
+            doc["requires_openai_auth"] = toml_edit::value(false);
+            changed = true;
+        }
+        if active_provider_id.is_none() {
+            if let Some(token) = bearer_token {
+                let has_token = doc
+                    .get("experimental_bearer_token")
+                    .and_then(|item| item.as_str())
+                    .is_some_and(|value| !value.trim().is_empty());
+                if !has_token {
+                    doc["experimental_bearer_token"] = toml_edit::value(token);
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    if let Some(model_providers) = doc
+        .get_mut("model_providers")
+        .and_then(|item| item.as_table_mut())
+    {
+        for (provider_id, provider) in model_providers.iter_mut() {
+            let Some(provider_table) = provider.as_table_mut() else {
+                continue;
+            };
+            let is_ai302 = provider_table
+                .get("base_url")
+                .and_then(|item| item.as_str())
+                .is_some_and(is_ai302_codex_base_url);
+            if !is_ai302 {
+                continue;
+            }
+
+            if provider_table
+                .get("requires_openai_auth")
+                .and_then(|item| item.as_bool())
+                != Some(false)
+            {
+                provider_table["requires_openai_auth"] = toml_edit::value(false);
+                changed = true;
+            }
+
+            if active_provider_id.as_deref() == Some(provider_id.get()) {
+                if let Some(token) = bearer_token {
+                    let has_token = provider_table
+                        .get("experimental_bearer_token")
+                        .and_then(|item| item.as_str())
+                        .is_some_and(|value| !value.trim().is_empty());
+                    if !has_token {
+                        provider_table["experimental_bearer_token"] = toml_edit::value(token);
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(changed.then(|| doc.to_string()))
+}
+
+fn codex_provider_prefers_scoped_bearer(config_text: &str) -> bool {
+    let Ok(doc) = config_text.parse::<toml::Value>() else {
+        return false;
+    };
+    let Some(provider_id) = doc.get("model_provider").and_then(|value| value.as_str()) else {
+        return doc
+            .get("requires_openai_auth")
+            .and_then(|value| value.as_bool())
+            == Some(false);
+    };
+
+    doc.get("model_providers")
+        .and_then(|providers| providers.get(provider_id))
+        .and_then(|provider| provider.get("requires_openai_auth"))
+        .and_then(|value| value.as_bool())
+        == Some(false)
+}
+
+/// 启动时修复 `~/.codex/config.toml` 中已生效的旧 302.AI 地址和认证路由。
+pub fn repair_ai302_codex_live_config() -> Result<bool, AppError> {
+    repair_ai302_codex_config_file(&get_codex_config_path())
+}
+
+fn repair_ai302_codex_config_file(path: &Path) -> Result<bool, AppError> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    let config_text = fs::read_to_string(path).map_err(|e| AppError::io(path, e))?;
+    let mut repaired = config_text.clone();
+    let mut changed = false;
+
+    if let Some(next) = repair_ai302_codex_base_urls(&repaired)
+        .map_err(|e| AppError::Message(format!("Failed to repair 302.AI Codex endpoint: {e}")))?
+    {
+        repaired = next;
+        changed = true;
+    }
+
+    let auth_path = get_codex_auth_path();
+    let live_api_key = if path == get_codex_config_path() && auth_path.exists() {
+        read_json_file(&auth_path)
+            .ok()
+            .and_then(|auth| extract_codex_auth_api_key(&auth))
+    } else {
+        None
+    };
+    if let Some(next) = repair_ai302_codex_auth_routing(&repaired, live_api_key.as_deref())
+        .map_err(|e| AppError::Message(format!("Failed to repair 302.AI Codex auth: {e}")))?
+    {
+        repaired = next;
+        changed = true;
+    }
+
+    if !changed {
+        return Ok(false);
+    }
+
+    write_text_file(path, &repaired)?;
+    Ok(true)
 }
 
 pub fn extract_codex_auth_api_key(auth: &Value) -> Option<String> {
@@ -1535,6 +1756,15 @@ pub fn write_codex_live_for_provider(
         };
     let config_text = unified_official_config.as_deref().or(config_text);
 
+    // Custom providers that explicitly opt out of OpenAI auth must carry their
+    // own bearer token. Do not put that key in auth.json, where Codex can treat
+    // it as (or replace it with) the user's OpenAI/ChatGPT credential.
+    if category != Some("official") && config_text.is_some_and(codex_provider_prefers_scoped_bearer)
+    {
+        let live_config = prepare_codex_provider_live_config(auth, config_text.unwrap_or(""))?;
+        return write_codex_live_config_atomic(Some(&live_config));
+    }
+
     let should_write_auth = (category == Some("official") && codex_auth_has_login_material(auth))
         || (category != Some("official")
             && !crate::settings::preserve_codex_official_auth_on_switch());
@@ -1739,6 +1969,10 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn legacy_ai302_codex_url(api_root: &str) -> String {
+        format!("{api_root}/{}/v1", "codex")
+    }
+
     #[test]
     fn unified_session_bucket_injects_for_empty_official_config() {
         let injected = inject_codex_unified_session_bucket("").expect("inject");
@@ -1892,6 +2126,112 @@ base_url = "https://other.example.com/v1"
             extract_codex_base_url(input).as_deref(),
             Some("https://azure.example.com/v1")
         );
+    }
+
+    #[test]
+    fn repairs_all_legacy_ai302_codex_base_urls() {
+        let overseas_legacy = legacy_ai302_codex_url("https://api.302.ai");
+        let domestic_legacy = legacy_ai302_codex_url("https://api.302ai.cn");
+        let input = format!(
+            r#"# keep this comment
+base_url = "{overseas_legacy}/"
+model_provider = "custom"
+
+[model_providers.custom]
+name = "302ai-cn"
+base_url = "{domestic_legacy}"
+wire_api = "responses"
+
+[model_providers.other]
+base_url = "https://other.example/v1"
+"#
+        );
+
+        let repaired = repair_ai302_codex_base_urls(&input)
+            .expect("valid TOML")
+            .expect("legacy URLs should be repaired");
+        assert!(repaired.contains("# keep this comment"));
+        assert!(!repaired.contains(&overseas_legacy));
+        assert!(!repaired.contains(&domestic_legacy));
+        assert_eq!(repaired.matches(AI302_OVERSEAS_CODEX_BASE_URL).count(), 1);
+        assert_eq!(repaired.matches(AI302_DOMESTIC_CODEX_BASE_URL).count(), 1);
+        assert!(repaired.contains("https://other.example/v1"));
+
+        assert_eq!(
+            repair_ai302_codex_base_urls(&repaired).expect("valid repaired TOML"),
+            None,
+            "repair must be idempotent"
+        );
+    }
+
+    #[test]
+    fn repairs_ai302_auth_routing_and_scopes_the_active_key() {
+        let input = r#"model_provider = "domestic"
+
+[model_providers.domestic]
+name = "302ai-cn"
+base_url = "https://api.302ai.cn/v1"
+wire_api = "responses"
+requires_openai_auth = true
+
+[model_providers.overseas]
+name = "302ai"
+base_url = "https://api.302.ai/v1"
+wire_api = "responses"
+requires_openai_auth = true
+
+[model_providers.other]
+base_url = "https://other.example/v1"
+requires_openai_auth = true
+"#;
+
+        let repaired = repair_ai302_codex_auth_routing(input, Some("sk-302"))
+            .expect("valid TOML")
+            .expect("legacy auth routing should be repaired");
+        let parsed: toml::Value = toml::from_str(&repaired).expect("parse repaired TOML");
+
+        assert_eq!(
+            parsed["model_providers"]["domestic"]["requires_openai_auth"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            parsed["model_providers"]["domestic"]["experimental_bearer_token"].as_str(),
+            Some("sk-302")
+        );
+        assert_eq!(
+            parsed["model_providers"]["overseas"]["requires_openai_auth"].as_bool(),
+            Some(false)
+        );
+        assert!(parsed["model_providers"]["overseas"]
+            .get("experimental_bearer_token")
+            .is_none());
+        assert_eq!(
+            parsed["model_providers"]["other"]["requires_openai_auth"].as_bool(),
+            Some(true)
+        );
+        assert!(codex_provider_prefers_scoped_bearer(&repaired));
+    }
+
+    #[test]
+    fn repairs_legacy_ai302_url_in_live_config_file() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let config_path = temp.path().join("config.toml");
+        let legacy_url = legacy_ai302_codex_url("https://api.302ai.cn");
+        std::fs::write(
+            &config_path,
+            format!(
+                "model_provider = \"custom\"\n\n[model_providers.custom]\nbase_url = \"{legacy_url}\"\nwire_api = \"responses\"\n"
+            ),
+        )
+        .expect("write legacy config");
+
+        assert!(repair_ai302_codex_config_file(&config_path).expect("repair live config"));
+        let repaired = std::fs::read_to_string(&config_path).expect("read repaired config");
+        assert!(repaired.contains("base_url = \"https://api.302ai.cn/v1\""));
+        assert!(!repaired.contains(&legacy_url));
+        assert!(repaired.contains("wire_api = \"responses\""));
+        assert!(repaired.contains("requires_openai_auth = false"));
+        assert!(!repair_ai302_codex_config_file(&config_path).expect("idempotent live repair"));
     }
 
     #[test]

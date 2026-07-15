@@ -18,9 +18,9 @@ export const AI302_ONBOARDING_APPS = ["claude", "codex", "gemini"] as const;
 export type Ai302OnboardingApp = (typeof AI302_ONBOARDING_APPS)[number];
 
 export const AI302_SEED_IDS: Record<Ai302OnboardingApp, string> = {
-  claude: "ai302-claude",
-  codex: "ai302-codex",
-  gemini: "ai302-gemini",
+  claude: "ai302-cn-claude",
+  codex: "ai302-cn-codex",
+  gemini: "ai302-cn-gemini",
 };
 
 export interface Ai302ModelMapping {
@@ -42,6 +42,16 @@ export function readAi302ApiKey(
   appId: AppId,
   config: Record<string, unknown>,
 ): string {
+  if (appId === "opencode") {
+    const options = config.options as Record<string, unknown> | undefined;
+    return typeof options?.apiKey === "string" ? options.apiKey : "";
+  }
+  if (appId === "openclaw") {
+    return typeof config.apiKey === "string" ? config.apiKey : "";
+  }
+  if (appId === "hermes") {
+    return typeof config.api_key === "string" ? config.api_key : "";
+  }
   if (appId === "codex") {
     const auth = config.auth as Record<string, unknown> | undefined;
     return typeof auth?.OPENAI_API_KEY === "string" ? auth.OPENAI_API_KEY : "";
@@ -62,6 +72,16 @@ export function writeAi302ApiKey(
   config: Record<string, unknown>,
   key: string,
 ): Record<string, unknown> {
+  if (appId === "opencode") {
+    const options = (config.options ?? {}) as Record<string, unknown>;
+    return { ...config, options: { ...options, apiKey: key } };
+  }
+  if (appId === "openclaw") {
+    return { ...config, apiKey: key };
+  }
+  if (appId === "hermes") {
+    return { ...config, api_key: key };
+  }
   if (appId === "codex") {
     const auth = (config.auth ?? {}) as Record<string, unknown>;
     return { ...config, auth: { ...auth, OPENAI_API_KEY: key } };
@@ -83,10 +103,29 @@ export function readAi302BaseUrl(
   appId: AppId,
   config: Record<string, unknown>,
 ): string {
+  if (appId === "opencode") {
+    const options = config.options as Record<string, unknown> | undefined;
+    const value = options?.baseURL;
+    return typeof value === "string" && value.trim()
+      ? value
+      : `${AI302_API_BASE_URL}/v1`;
+  }
+  if (appId === "openclaw") {
+    const value = config.baseUrl;
+    return typeof value === "string" && value.trim()
+      ? value
+      : AI302_API_BASE_URL;
+  }
+  if (appId === "hermes") {
+    const value = config.base_url;
+    return typeof value === "string" && value.trim()
+      ? value
+      : `${AI302_API_BASE_URL}/v1`;
+  }
   if (appId === "codex") {
     const toml = typeof config.config === "string" ? config.config : "";
     const match = toml.match(/^\s*base_url\s*=\s*["']([^"']+)["']/m);
-    return match?.[1] || `${AI302_API_BASE_URL}/codex/v1`;
+    return match?.[1] || `${AI302_API_BASE_URL}/v1`;
   }
   const env = config.env as Record<string, unknown> | undefined;
   const field =
@@ -133,6 +172,28 @@ export function getAi302ModelStrategy(
           mode: "fixed",
           mappings: [{ role: "default", model: model.trim() }],
         }
+      : { mode: "follow", mappings: [] };
+  }
+
+  if (appId === "opencode") {
+    const models = config.models as Record<string, unknown> | undefined;
+    const model = models ? Object.keys(models)[0] : undefined;
+    return model
+      ? { mode: "fixed", mappings: [{ role: "default", model }] }
+      : { mode: "follow", mappings: [] };
+  }
+
+  if (appId === "openclaw" || appId === "hermes") {
+    const models = Array.isArray(config.models) ? config.models : [];
+    const model = models
+      .map((item) =>
+        item && typeof item === "object"
+          ? (item as Record<string, unknown>).id
+          : undefined,
+      )
+      .find((id): id is string => typeof id === "string" && id.trim() !== "");
+    return model
+      ? { mode: "fixed", mappings: [{ role: "default", model }] }
       : { mode: "follow", mappings: [] };
   }
 

@@ -2,9 +2,10 @@ use serde_json::json;
 use std::path::{Path, PathBuf};
 
 use cc_switch_lib::{
-    get_codex_auth_path, get_codex_config_path, import_default_config_test_hook, read_json_file,
-    switch_provider_test_hook, write_codex_live_atomic, AppError, AppType, McpApps, McpServer,
-    MultiAppConfig, Provider, ProviderService,
+    get_claude_settings_path, get_codex_auth_path, get_codex_config_path,
+    import_default_config_test_hook, read_json_file, switch_provider_test_hook,
+    write_codex_live_atomic, AppError, AppType, McpApps, McpServer, MultiAppConfig, Provider,
+    ProviderService,
 };
 
 #[path = "support.rs"]
@@ -19,8 +20,12 @@ fn settings_path(home: &Path) -> PathBuf {
     home.join(".302-cc-switch").join("settings.json")
 }
 
+fn legacy_ai302_codex_url(api_root: &str) -> String {
+    format!("{api_root}/{}/v1", "codex")
+}
+
 #[test]
-fn codex_startup_import_fresh_install_imports_once_and_syncs_current_setting() {
+fn codex_startup_never_auto_imports_live_config_as_default() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
     let home = ensure_test_home();
@@ -33,32 +38,55 @@ fn codex_startup_import_fresh_install_imports_once_and_syncs_current_setting() {
     let state = create_test_state().expect("create test state");
 
     assert!(
-        ProviderService::should_import_default_config_on_startup(&state, &AppType::Codex)
+        !ProviderService::should_import_default_config_on_startup(&state, &AppType::Codex)
             .expect("check startup import eligibility"),
-        "empty Codex provider set should import on startup"
+        "Codex startup must not turn the live config into a default provider"
     );
-
-    import_default_config_test_hook(&state, AppType::Codex).expect("import codex default");
 
     let providers = state
         .db
         .get_all_providers(AppType::Codex.as_str())
-        .expect("get codex providers after import");
-    assert_eq!(
-        providers.len(),
-        1,
-        "fresh install import should create exactly one Codex provider before seeding"
-    );
+        .expect("get codex providers after startup check");
+    assert!(providers.is_empty());
+    assert!(!providers.contains_key("default"));
+    if settings_path(home).exists() {
+        let settings: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(settings_path(home)).expect("read settings.json"),
+        )
+        .expect("parse settings.json");
+        assert!(settings.get("currentProviderCodex").is_none());
+    }
+}
+
+#[test]
+fn codex_without_current_provider_defaults_to_domestic_ai302() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let home = ensure_test_home();
+    let state = create_test_state().expect("create test state");
+    state
+        .db
+        .init_ai302_providers()
+        .expect("seed 302.AI providers");
+
     assert!(
-        providers.contains_key("default"),
-        "fresh install import should create default provider"
+        ProviderService::migrate_codex_default_to_ai302_domestic(&state)
+            .expect("select domestic Codex provider")
     );
 
-    let current_id = state
+    assert_eq!(
+        state
+            .db
+            .get_current_provider(AppType::Codex.as_str())
+            .expect("read current provider")
+            .as_deref(),
+        Some("ai302-cn-codex")
+    );
+    assert!(state
         .db
-        .get_current_provider(AppType::Codex.as_str())
-        .expect("get codex current provider");
-    assert_eq!(current_id.as_deref(), Some("default"));
+        .get_provider_by_id("default", AppType::Codex.as_str())
+        .expect("query default provider")
+        .is_none());
 
     let settings: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(settings_path(home)).expect("read settings.json"),
@@ -67,31 +95,271 @@ fn codex_startup_import_fresh_install_imports_once_and_syncs_current_setting() {
     assert_eq!(
         settings
             .get("currentProviderCodex")
-            .and_then(|value| value.as_str()),
-        Some("default"),
-        "live import should also sync device-local currentProviderCodex"
+            .and_then(serde_json::Value::as_str),
+        Some("ai302-cn-codex")
     );
 
+    let live_config =
+        std::fs::read_to_string(get_codex_config_path()).expect("read Codex live config");
+    assert!(live_config.contains("base_url = \"https://api.302ai.cn/v1\""));
+    assert!(!live_config.contains("/codex/"));
+}
+
+#[test]
+fn seeded_apps_without_current_provider_default_to_domestic_ai302() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let _home = ensure_test_home();
+    let state = create_test_state().expect("create test state");
     state
         .db
-        .init_default_official_providers()
-        .expect("seed official providers");
-    let providers_after_seed = state
+        .init_ai302_providers()
+        .expect("seed 302.AI providers");
+
+    for (app_type, expected_id) in [
+        (AppType::Claude, "ai302-cn-claude"),
+        (AppType::ClaudeDesktop, "ai302-cn-claude-desktop"),
+        (AppType::Codex, "ai302-cn-codex"),
+        (AppType::Gemini, "ai302-cn-gemini"),
+    ] {
+        assert!(
+            ProviderService::migrate_default_to_ai302_domestic(&state, app_type.clone())
+                .expect("select domestic 302.AI provider"),
+            "{} should receive an initial selection",
+            app_type.as_str()
+        );
+        assert_eq!(
+            state
+                .db
+                .get_current_provider(app_type.as_str())
+                .expect("read current provider")
+                .as_deref(),
+            Some(expected_id),
+            "{} should default to its domestic seed",
+            app_type.as_str()
+        );
+        assert!(state
+            .db
+            .get_provider_by_id("default", app_type.as_str())
+            .expect("query default provider")
+            .is_none());
+    }
+}
+
+#[test]
+fn claude_default_migrates_to_domestic_ai302_and_preserves_key() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let _home = ensure_test_home();
+    let state = create_test_state().expect("create test state");
+    state
         .db
-        .get_all_providers(AppType::Codex.as_str())
-        .expect("get codex providers after seed");
-    assert_eq!(
-        providers_after_seed.len(),
-        2,
-        "official seeding should add codex-official alongside imported default"
+        .init_ai302_providers()
+        .expect("seed 302.AI providers");
+
+    let legacy = Provider::with_id(
+        "default".to_string(),
+        "default".to_string(),
+        json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://api.302ai.cn",
+                "ANTHROPIC_API_KEY": "preserved-key"
+            }
+        }),
+        None,
     );
-    assert!(providers_after_seed.contains_key("codex-official"));
+    state
+        .db
+        .save_provider(AppType::Claude.as_str(), &legacy)
+        .expect("save legacy default");
+    switch_provider_test_hook(&state, AppType::Claude, "default").expect("select legacy default");
 
     assert!(
-        !ProviderService::should_import_default_config_on_startup(&state, &AppType::Codex)
-            .expect("re-check startup import eligibility"),
-        "subsequent startup should skip once Codex already has providers"
+        ProviderService::migrate_default_to_ai302_domestic(&state, AppType::Claude)
+            .expect("migrate legacy default")
     );
+
+    assert!(state
+        .db
+        .get_provider_by_id("default", AppType::Claude.as_str())
+        .expect("query default provider")
+        .is_none());
+    let domestic = state
+        .db
+        .get_provider_by_id("ai302-cn-claude", AppType::Claude.as_str())
+        .expect("query domestic provider")
+        .expect("domestic provider exists");
+    assert_eq!(
+        domestic
+            .settings_config
+            .pointer("/env/ANTHROPIC_API_KEY")
+            .and_then(serde_json::Value::as_str),
+        Some("preserved-key")
+    );
+    assert_eq!(
+        state
+            .db
+            .get_current_provider(AppType::Claude.as_str())
+            .expect("read current provider")
+            .as_deref(),
+        Some("ai302-cn-claude")
+    );
+
+    let live: serde_json::Value =
+        read_json_file(&get_claude_settings_path()).expect("read Claude live config");
+    assert_eq!(
+        live.pointer("/env/ANTHROPIC_BASE_URL")
+            .and_then(serde_json::Value::as_str),
+        Some("https://api.302ai.cn")
+    );
+    assert_eq!(
+        live.pointer("/env/ANTHROPIC_API_KEY")
+            .and_then(serde_json::Value::as_str),
+        Some("preserved-key")
+    );
+}
+
+#[test]
+fn codex_default_migrates_to_domestic_ai302_and_preserves_key() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let _home = ensure_test_home();
+    let state = create_test_state().expect("create test state");
+    state
+        .db
+        .init_ai302_providers()
+        .expect("seed 302.AI providers");
+
+    let legacy_url = legacy_ai302_codex_url("https://api.302ai.cn");
+    let legacy = Provider::with_id(
+        "default".to_string(),
+        "default".to_string(),
+        json!({
+            "auth": {"OPENAI_API_KEY": "preserved-key"},
+            "config": format!(
+                "model_provider = \"custom\"\n\n[model_providers.custom]\nname = \"302ai-cn\"\nbase_url = \"{legacy_url}\"\nwire_api = \"responses\"\nrequires_openai_auth = true"
+            )
+        }),
+        None,
+    );
+    state
+        .db
+        .save_provider(AppType::Codex.as_str(), &legacy)
+        .expect("save legacy default");
+    switch_provider_test_hook(&state, AppType::Codex, "default").expect("select legacy default");
+
+    assert!(
+        ProviderService::migrate_codex_default_to_ai302_domestic(&state)
+            .expect("migrate legacy default")
+    );
+
+    assert!(state
+        .db
+        .get_provider_by_id("default", AppType::Codex.as_str())
+        .expect("query default provider")
+        .is_none());
+    let domestic = state
+        .db
+        .get_provider_by_id("ai302-cn-codex", AppType::Codex.as_str())
+        .expect("query domestic provider")
+        .expect("domestic provider exists");
+    assert_eq!(
+        domestic
+            .settings_config
+            .pointer("/auth/OPENAI_API_KEY")
+            .and_then(serde_json::Value::as_str),
+        Some("preserved-key")
+    );
+    let stored_config = domestic.settings_config["config"]
+        .as_str()
+        .expect("stored Codex config");
+    assert!(stored_config.contains("base_url = \"https://api.302ai.cn/v1\""));
+    assert!(!stored_config.contains("/codex/"));
+    assert_eq!(
+        state
+            .db
+            .get_current_provider(AppType::Codex.as_str())
+            .expect("read current provider")
+            .as_deref(),
+        Some("ai302-cn-codex")
+    );
+
+    let live_auth: serde_json::Value =
+        read_json_file(&get_codex_auth_path()).expect("read Codex live auth");
+    assert_eq!(
+        live_auth
+            .get("OPENAI_API_KEY")
+            .and_then(serde_json::Value::as_str),
+        Some("preserved-key")
+    );
+    let live_config =
+        std::fs::read_to_string(get_codex_config_path()).expect("read Codex live config");
+    assert!(live_config.contains("base_url = \"https://api.302ai.cn/v1\""));
+    assert!(!live_config.contains("/codex/"));
+}
+
+#[test]
+fn codex_default_cleanup_keeps_user_selected_provider() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let _home = ensure_test_home();
+    let state = create_test_state().expect("create test state");
+    state
+        .db
+        .init_ai302_providers()
+        .expect("seed 302.AI providers");
+
+    let legacy = Provider::with_id(
+        "default".to_string(),
+        "default".to_string(),
+        json!({
+            "auth": {"OPENAI_API_KEY": "legacy-key"},
+            "config": ""
+        }),
+        None,
+    );
+    state
+        .db
+        .save_provider(AppType::Codex.as_str(), &legacy)
+        .expect("save legacy default");
+
+    let selected = Provider::with_id(
+        "my-provider".to_string(),
+        "My Provider".to_string(),
+        json!({
+            "auth": {"OPENAI_API_KEY": "custom-key"},
+            "config": "model_provider = \"custom\"\n\n[model_providers.custom]\nname = \"custom\"\nbase_url = \"https://custom.example/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true"
+        }),
+        None,
+    );
+    state
+        .db
+        .save_provider(AppType::Codex.as_str(), &selected)
+        .expect("save selected provider");
+    switch_provider_test_hook(&state, AppType::Codex, "my-provider")
+        .expect("select custom provider");
+
+    assert!(
+        ProviderService::migrate_codex_default_to_ai302_domestic(&state)
+            .expect("clean up legacy default")
+    );
+    assert!(state
+        .db
+        .get_provider_by_id("default", AppType::Codex.as_str())
+        .expect("query default provider")
+        .is_none());
+    assert_eq!(
+        state
+            .db
+            .get_current_provider(AppType::Codex.as_str())
+            .expect("read current provider")
+            .as_deref(),
+        Some("my-provider")
+    );
+    let live_config =
+        std::fs::read_to_string(get_codex_config_path()).expect("read Codex live config");
+    assert!(live_config.contains("https://custom.example/v1"));
+    assert!(!live_config.contains("https://api.302ai.cn/v1"));
 }
 
 #[test]

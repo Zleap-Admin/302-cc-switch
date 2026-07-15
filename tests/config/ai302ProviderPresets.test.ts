@@ -6,6 +6,7 @@ import { claudeDesktopProviderPresets } from "@/config/claudeDesktopProviderPres
 import { opencodeProviderPresets } from "@/config/opencodeProviderPresets";
 import { openclawProviderPresets } from "@/config/openclawProviderPresets";
 import { hermesProviderPresets } from "@/config/hermesProviderPresets";
+import { AI302_SEED_IDS } from "@/config/ai302";
 
 // 302 版核心约定：每个应用的预设列表只有「官方 + 302.AI」
 // （opencode/openclaw 无官方供应商；opencode 另保留两个自定义模板）。
@@ -26,6 +27,7 @@ describe("302.AI presets across apps", () => {
     expect(p.apiKeyField).toBe("ANTHROPIC_API_KEY");
     // 国内节点作为测速候选
     expect(p.endpointCandidates).toContain("https://api.302ai.cn");
+    expect(AI302_SEED_IDS.claude).toBe("ai302-cn-claude");
   });
 
   it("Codex: official + 302.AI + OpenAI API (direct escape hatch)", () => {
@@ -37,11 +39,19 @@ describe("302.AI presets across apps", () => {
       "302.AI",
       "OpenAI API",
     ]);
-    // 302 的 Codex 专用端点（/codex/v1）走原生 Responses，直连不转换
+    // 302 的海外、国内地址都直接使用 /v1，没有 /codex 路径
     const p = codexProviderPresets.find((x) => x.name === "302.AI")!;
-    expect(p.config).toContain('base_url = "https://api.302.ai/codex/v1"');
+    expect(p.config).toContain('base_url = "https://api.302.ai/v1"');
+    expect(p.config).toContain("requires_openai_auth = false");
+    expect(p.config).not.toContain("/codex/");
+    expect(p.endpointCandidates).toContain("https://api.302.ai/v1");
+    expect(p.endpointCandidates).toContain("https://api.302ai.cn/v1");
+    expect(p.endpointCandidates?.every((url) => !url.includes("/codex/"))).toBe(
+      true,
+    );
     expect(p.apiFormat).toBe("openai_responses");
     expect(p.auth).toHaveProperty("OPENAI_API_KEY", "");
+    expect(AI302_SEED_IDS.codex).toBe("ai302-cn-codex");
 
     const direct = codexProviderPresets.find((x) => x.name === "OpenAI API")!;
     expect(direct.config).toContain('base_url = "https://api.openai.com/v1"');
@@ -58,6 +68,8 @@ describe("302.AI presets across apps", () => {
     ]);
     const p = geminiProviderPresets.find((x) => x.name === "302.AI")!;
     expect(p.baseURL).toBe("https://api.302.ai");
+    expect((p.settingsConfig as any).env).toHaveProperty("GEMINI_API_KEY", "");
+    expect(AI302_SEED_IDS.gemini).toBe("ai302-cn-gemini");
   });
 
   it("Claude Desktop: official + 302.AI only, passthrough routes", () => {
@@ -80,14 +92,14 @@ describe("302.AI presets across apps", () => {
     const p = opencodeProviderPresets.find((x) => x.name === "302.AI")!;
     expect(p.settingsConfig.npm).toBe("@ai-sdk/anthropic");
     expect((p.settingsConfig.options as any).baseURL).toBe(
-      "https://api.302.ai/v1",
+      "https://api.302ai.cn/v1",
     );
   });
 
   it("OpenClaw: 302.AI only, anthropic-messages protocol", () => {
     expect(openclawProviderPresets.map((p) => p.name)).toEqual(["302.AI"]);
     const p = openclawProviderPresets[0];
-    expect(p.settingsConfig.baseUrl).toBe("https://api.302.ai");
+    expect(p.settingsConfig.baseUrl).toBe("https://api.302ai.cn");
     expect(p.settingsConfig.api).toBe("anthropic-messages");
   });
 
@@ -97,7 +109,7 @@ describe("302.AI presets across apps", () => {
       "302.AI",
     ]);
     const p = hermesProviderPresets.find((x) => x.name === "302.AI")!;
-    expect(p.settingsConfig.base_url).toBe("https://api.302.ai/v1");
+    expect(p.settingsConfig.base_url).toBe("https://api.302ai.cn/v1");
     expect(p.settingsConfig.api_mode).toBe("chat_completions");
   });
 

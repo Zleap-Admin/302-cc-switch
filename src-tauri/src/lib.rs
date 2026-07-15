@@ -546,11 +546,12 @@ pub fn run() {
                 Err(e) => log::warn!("✗ Failed to read skills migration flag: {e}"),
             }
 
-            // 1.5. 自动导入 live 配置 + seed 官方预设供应商（Claude / Codex / Gemini）
+            // 1.5. 自动导入 live 配置 + seed 官方预设供应商（Claude / Gemini）
             //
-            // 先 import 后 seed 是有意为之：先把用户手动配置的 settings.json / auth.json / .env
-            // 落成 "default" provider 设为 current，再追加官方预设（is_current=false）。
-            // 这样用户切到官方预设时，回填机制会保护原 live 配置不丢失。
+            // 先 import 后 seed 是有意为之：旧安装中的 302.AI live key 会先被
+            // 捕获到临时 "default" provider。种子就位后，下面的迁移会把 key
+            // 合并到对应的 302.AI 国内卡并删除临时卡。已有明确用户选择时不改选。
+            // Codex 不走自动导入路径，但同样默认选中 302.AI 国内节点。
             //
             // 捕获首次运行快照：所有全新装用户都会看到欢迎弹窗介绍 302 CC Switch 的工作方式。
             // 读失败时默认不弹，宁可漏弹也不要因为故障打扰用户。
@@ -612,35 +613,47 @@ pub fn run() {
                 Err(e) => log::warn!("✗ Failed to seed 302.AI providers: {e}"),
             }
 
-            // 官方登录用户的 live 导入被有意跳过（见 import_default_config 的
-            // 官方识别），此时 Claude 没有 current。种子就位后把 Claude Official
-            // 设为当前，首屏即显示正确的「使用中」，而不是一张没有选中的列表。
-            {
-                let claude = crate::app_config::AppType::Claude;
-                let no_current = crate::settings::get_effective_current_provider(
-                    &app_state.db,
-                    &claude,
-                )
-                .ok()
-                .flatten()
-                .is_none();
-                let official_seeded = app_state
-                    .db
-                    .get_provider_by_id("claude-official", claude.as_str())
-                    .ok()
-                    .flatten()
-                    .is_some();
-                if no_current && official_seeded {
-                    let _ = app_state
-                        .db
-                        .set_current_provider(claude.as_str(), "claude-official");
-                    let _ = crate::settings::set_current_provider(
-                        &claude,
-                        Some("claude-official"),
-                    );
-                    log::info!(
-                        "✓ Claude has no current provider; defaulting to Claude Official"
-                    );
+            // 旧包曾给 302.AI Codex 地址增加多余路径。数据库卡片修复后还要同步
+            // 修复当前 live config，否则用户不重新切换卡片时仍会继续请求旧地址。
+            match crate::codex_config::repair_ai302_codex_live_config() {
+                Ok(true) => {
+                    log::info!("✓ Repaired live 302.AI Codex endpoint and auth routing");
+                    // Re-project the selected provider immediately. This puts its stored
+                    // 302.AI key into the provider-scoped bearer field, even when auth.json
+                    // contains a preserved ChatGPT login instead of an OPENAI_API_KEY.
+                    if let Err(e) = crate::services::provider::ProviderService::sync_current_provider_for_app(
+                        &app_state,
+                        crate::app_config::AppType::Codex,
+                    ) {
+                        log::warn!("✗ Failed to refresh live 302.AI Codex credentials: {e}");
+                    }
+                }
+                Ok(false) => {}
+                Err(e) => log::warn!("✗ Failed to repair live 302.AI Codex endpoint: {e}"),
+            }
+
+            // 历史版本会把 live 配置导入成名为 default 的卡片。4 个独占模式
+            // 应用都移除这张内部临时卡；没有明确用户选择时，统一默认到 302.AI
+            // 国内节点。若临时卡已经是 302.AI，则先保留其中的 key。
+            for app_type in [
+                crate::app_config::AppType::Claude,
+                crate::app_config::AppType::ClaudeDesktop,
+                crate::app_config::AppType::Codex,
+                crate::app_config::AppType::Gemini,
+            ] {
+                match crate::services::provider::ProviderService::migrate_default_to_ai302_domestic(
+                    &app_state,
+                    app_type.clone(),
+                ) {
+                    Ok(true) => log::info!(
+                        "✓ {} now defaults to the domestic 302.AI provider",
+                        app_type.as_str()
+                    ),
+                    Ok(false) => {}
+                    Err(e) => log::warn!(
+                        "✗ Failed to migrate the {} default provider: {e}",
+                        app_type.as_str()
+                    ),
                 }
             }
 

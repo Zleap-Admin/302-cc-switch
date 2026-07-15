@@ -40,6 +40,33 @@ describe("ai302 config helpers", () => {
     expect(readAi302ApiKey("claude-desktop", updated)).toBe("sk-updated");
   });
 
+  it("reads and writes additive-app API key fields", () => {
+    const opencode = writeAi302ApiKey(
+      "opencode",
+      { options: { baseURL: "https://api.302ai.cn/v1", apiKey: "" } },
+      "sk-opencode",
+    );
+    const openclaw = writeAi302ApiKey(
+      "openclaw",
+      { baseUrl: "https://api.302ai.cn", apiKey: "" },
+      "sk-openclaw",
+    );
+    const hermes = writeAi302ApiKey(
+      "hermes",
+      { base_url: "https://api.302ai.cn/v1", api_key: "" },
+      "sk-hermes",
+    );
+
+    expect(readAi302ApiKey("opencode", opencode)).toBe("sk-opencode");
+    expect(readAi302BaseUrl("opencode", opencode)).toBe(
+      "https://api.302ai.cn/v1",
+    );
+    expect(readAi302ApiKey("openclaw", openclaw)).toBe("sk-openclaw");
+    expect(readAi302BaseUrl("openclaw", openclaw)).toBe("https://api.302ai.cn");
+    expect(readAi302ApiKey("hermes", hermes)).toBe("sk-hermes");
+    expect(readAi302BaseUrl("hermes", hermes)).toBe("https://api.302ai.cn/v1");
+  });
+
   it("prefers a non-empty Claude Desktop AUTH_TOKEN over the legacy field", () => {
     expect(
       readAi302ApiKey("claude-desktop", {

@@ -282,13 +282,13 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
   {
     // 302.AI 走 Anthropic SDK：base 是 Anthropic 兼容层的 /v1。
     name: "302.AI",
-    websiteUrl: "https://302.ai",
+    websiteUrl: "https://api.302ai.cn",
     apiKeyUrl: "https://302.ai",
     settingsConfig: {
       npm: "@ai-sdk/anthropic",
       name: "302.AI",
       options: {
-        baseURL: "https://api.302.ai/v1",
+        baseURL: "https://api.302ai.cn/v1",
         apiKey: "",
         setCacheKey: true,
       },

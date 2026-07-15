@@ -231,31 +231,17 @@
   躺着主理人自己一大块（`FirstRunNoticeDialog.tsx` 约 1000+ 行）尚未提交的引导页开发工作——这次
   一并提交，不是只提交这三处小改动。
 
-### ✅ 已改：Codex 302 卡切换到专用直连端点（2026-07-15）
+### ✅ 已改：Codex 302 节点统一使用 `/v1`（2026-07-15）
 
-主理人问「需要路由」徽章从哪来——排查后发现 Codex 的 302 种子/预设一直走的是通用 OpenAI
-兼容层 `api.302.ai/v1`（只承诺 chat/completions），所以标了 `apiFormat="openai_chat"`
-启用本地 Responses→Chat 转换，徽章就是这个标记的 UI 提示。经老板确认，302 有 Codex 专用的
-原生 Responses 端点，应该直连：
-
-- **事实源**：官方文档「Responses（For Codex CLI only）」https://doc.302.ai/359389143e0 ，
-  端点 `https://api.302.ai/codex/v1/responses`（国内 `api.302ai.cn` 同路径），官方 API 3 折
-  计费、支持缓存命中。文档页标了 deprecated，但老板拍板用这个。
-- **改动**：`codexProviderPresets.ts` 的 302.AI 预设 + `providers_seed.rs` 两张 Codex 种子卡，
-  base_url 改 `…/codex/v1`，`apiFormat` 改 `openai_responses`（原生透传，不再本地转换，
-  「需要路由」徽章随之消失）。
-- **连带**：`Ai302KeyDialog` 验证 key 时剥掉 `/codex/v1` 后缀退回通用层（专用端点不提供
-  `/models`）；`ai302.ts` 的 codex base URL fallback 同步更新。
-- **存量数据迁移**（同日补）：老板原话「不管旧机器、全员重新下载」——但重装 app 并不会
-  重置 `~/.302-cc-switch` 数据库，主理人本机装了新包后徽章依旧，当场证伪。于是给
-  `repair_ai302_providers` 加了端点迁移：旧 Codex 卡若仍是出厂形态（`/v1` 旧默认地址 +
-  `openai_chat`），启动时整体升级为 `/codex/v1` + `openai_responses`；用户自定义过的
-  地址/格式逐字不匹配旧默认，原样保留（与既有的 model 行剥离迁移同一套路）。
-  本地转换代码路径未删，真正自定义走 chat 格式的卡照常工作。
-- 验证：`tsc --noEmit` ✓；`vitest` 375/375 ✓；`cargo test --lib` 1786/1786（含新迁移测试）✓。
-  **真 key 实跑 Codex 未做**（无 key），归入上方「真 key 全链路」待办。
-- ⚠️ 若卡片当前正被使用，迁移只改数据库存档；live `~/.codex/config.toml` 要等用户重新
-  点一次「切换」才会写入新地址。
+- **最终地址**：海外 `https://api.302.ai/v1`，国内 `https://api.302ai.cn/v1`；两者都以
+  `openai_responses` 原生透传，不走本地 Responses→Chat 转换。
+- **配置一致性**：前端预设、两张数据库种子卡、Key 诊断和 Codex fallback 全部统一到 `/v1`。
+- **存量迁移**：启动时扫描全部 Codex 卡片、地址候选表和 live `config.toml`，只把 302.AI
+  两个域名下旧版本增加的多余路径改回 `/v1`；Key、模型、注释和其他自定义地址保持不变。
+- **默认选择**：不再自动创建 Codex `default` 卡；已有 `default` 会删除。若它正在使用或当前
+  没有选择，则启用 `302.AI（国内）`，并在删除前保留其中已有的 302 API Key。用户已经选择
+  其他供应商时不强制切换。
+- **真 Key 实跑**：未做（无 Key），归入上方「真 Key 全链路」待办。
 
 ### 产品 polish 方向（2026-07-14 讨论）
 
@@ -500,35 +486,19 @@ first-run setup flow). Confirmed and fixed each:
   not-yet-committed onboarding work — this commit includes all of it, not just the three
   fixes above.
 
-### ✅ Changed: Codex 302 cards now use the dedicated direct-connect endpoint (2026-07-15)
+### ✅ Changed: both Codex 302 nodes now use `/v1` (2026-07-15)
 
-The owner asked where the "需要路由" (needs routing) badge came from. Root cause: the Codex
-302 seed/preset pointed at the generic OpenAI-compat layer `api.302.ai/v1` (chat/completions
-only), so it was tagged `apiFormat="openai_chat"` to enable the local Responses→Chat
-conversion — the badge is that tag's UI hint. The boss confirmed 302 has a Codex-only native
-Responses endpoint and it should be direct:
-
-- **Source of truth**: official doc "Responses (For Codex CLI only)"
-  https://doc.302.ai/359389143e0 — endpoint `https://api.302.ai/codex/v1/responses`
-  (`api.302ai.cn` same path for the domestic node), billed at 30% of the official API price
-  with cache-hit support. The doc page is flagged deprecated, but the boss signed off on it.
-- **Change**: the 302.AI preset in `codexProviderPresets.ts` + both Codex seeds in
-  `providers_seed.rs`: base_url → `…/codex/v1`, `apiFormat` → `openai_responses` (native
-  passthrough, no local conversion; the routing badge disappears with it).
-- **Fallout handled**: `Ai302KeyDialog` strips the `/codex/v1` suffix before key
-  verification (the dedicated endpoint doesn't serve `/models`); the codex base-URL fallback
-  in `ai302.ts` updated to match.
-- **Existing-data migration** (added same day): the boss had said "ignore old machines,
-  everyone re-downloads" — but reinstalling the app does NOT reset the `~/.302-cc-switch`
-  database; the owner installed the new build and the badge was still there, disproving the
-  plan on the spot. So `repair_ai302_providers` gained an endpoint migration: legacy Codex
-  cards still in factory shape (old `/v1` default base URL + `openai_chat`) get upgraded to
-  `/codex/v1` + `openai_responses` at startup; user-customized URLs/formats don't match the
-  old default verbatim and are left untouched (same pattern as the existing model-pin strip).
-  The local conversion code path remains for genuinely chat-format providers.
-- Verified: `tsc --noEmit` clean; `vitest` 375/375; `cargo test --lib` 1786/1786 (incl. the
-  new migration test).
-  **No real-key end-to-end Codex run yet** (no key on hand) — tracked under the existing
+- **Final endpoints**: overseas `https://api.302.ai/v1`, domestic `https://api.302ai.cn/v1`.
+  Both use native `openai_responses` passthrough.
+- **Consistent configuration**: frontend presets, both database seeds, Key diagnostics, and the
+  Codex fallback all use `/v1`.
+- **Existing-data migration**: startup repairs the old extra path only on the two 302.AI hosts
+  across every Codex provider, endpoint candidate, and live `config.toml`. Keys, models,
+  comments, and unrelated custom URLs are preserved.
+- **Default selection**: Codex no longer auto-creates a `default` card. Existing cards with that
+  id are removed; when one was active or no provider was selected, the domestic 302.AI seed is
+  selected and its existing 302 API Key is preserved. Explicit user selections are untouched.
+- **No real-key end-to-end Codex run yet** (no key on hand) — tracked under the existing
   "real-key full-chain" TODO.
 - ⚠️ If the card is currently active, the migration only fixes the DB archive; the live
   `~/.codex/config.toml` gets the new URL only after the user re-switches to the card.

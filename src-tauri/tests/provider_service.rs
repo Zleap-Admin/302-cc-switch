@@ -793,6 +793,80 @@ requires_openai_auth = true
 }
 
 #[test]
+fn provider_service_switch_codex_scoped_bearer_avoids_chatgpt_token_401() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let _home = ensure_test_home();
+
+    let oauth_auth = json!({
+        "auth_mode": "chatgpt",
+        "OPENAI_API_KEY": null,
+        "tokens": {
+            "access_token": "official-oauth-token",
+            "account_id": "acct-1"
+        }
+    });
+    write_codex_live_atomic(&oauth_auth, Some("")).expect("seed existing Codex OAuth live config");
+
+    let mut initial_config = MultiAppConfig::default();
+    let manager = initial_config
+        .get_manager_mut(&AppType::Codex)
+        .expect("codex manager");
+    manager.current = "official".to_string();
+    let mut official = Provider::with_id(
+        "official".to_string(),
+        "OpenAI Official".to_string(),
+        oauth_auth.clone(),
+        None,
+    );
+    official.settings_config = json!({ "auth": oauth_auth, "config": "" });
+    official.category = Some("official".to_string());
+    manager.providers.insert("official".to_string(), official);
+
+    let mut ai302 = Provider::with_id(
+        "ai302-cn-codex".to_string(),
+        "302.AI（国内）".to_string(),
+        json!({
+            "auth": {"OPENAI_API_KEY": "sk-302"},
+            "config": r#"model_provider = "custom"
+
+[model_providers.custom]
+name = "302ai-cn"
+base_url = "https://api.302ai.cn/v1"
+wire_api = "responses"
+requires_openai_auth = false
+"#
+        }),
+        None,
+    );
+    ai302.category = Some("aggregator".to_string());
+    manager
+        .providers
+        .insert("ai302-cn-codex".to_string(), ai302);
+
+    let state = create_test_state_with_config(&initial_config).expect("create test state");
+    ProviderService::switch(&state, AppType::Codex, "ai302-cn-codex")
+        .expect("switch to 302.AI should succeed");
+
+    let auth_after: serde_json::Value =
+        read_json_file(&cc_switch_lib::get_codex_auth_path()).expect("read auth.json");
+    assert_eq!(
+        auth_after
+            .pointer("/tokens/access_token")
+            .and_then(|v| v.as_str()),
+        Some("official-oauth-token"),
+        "provider-scoped auth must not replace the user's ChatGPT login"
+    );
+
+    let config_after =
+        std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config.toml");
+    let parsed: toml::Value = toml::from_str(&config_after).expect("parse config.toml");
+    let active = &parsed["model_providers"]["custom"];
+    assert_eq!(active["requires_openai_auth"].as_bool(), Some(false));
+    assert_eq!(active["experimental_bearer_token"].as_str(), Some("sk-302"));
+}
+
+#[test]
 fn provider_service_switch_codex_supports_official_login_provider_without_auth_write() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();

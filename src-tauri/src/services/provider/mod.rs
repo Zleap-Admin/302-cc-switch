@@ -2556,6 +2556,178 @@ impl ProviderService {
         sync_current_to_live(state)
     }
 
+    fn domestic_ai302_provider_id(app_type: &AppType) -> Option<&'static str> {
+        match app_type {
+            AppType::Claude => Some("ai302-cn-claude"),
+            AppType::ClaudeDesktop => Some("ai302-cn-claude-desktop"),
+            AppType::Codex => Some("ai302-cn-codex"),
+            AppType::Gemini => Some("ai302-cn-gemini"),
+            AppType::OpenCode | AppType::OpenClaw | AppType::Hermes => None,
+        }
+    }
+
+    fn ai302_api_key<'a>(app_type: &AppType, settings: &'a Value) -> Option<&'a str> {
+        let candidates: &[&str] = match app_type {
+            AppType::Claude => &["/env/ANTHROPIC_API_KEY", "/env/ANTHROPIC_AUTH_TOKEN"],
+            AppType::ClaudeDesktop => &["/env/ANTHROPIC_AUTH_TOKEN", "/env/ANTHROPIC_API_KEY"],
+            AppType::Codex => &["/auth/OPENAI_API_KEY"],
+            AppType::Gemini => &["/env/GEMINI_API_KEY"],
+            AppType::OpenCode | AppType::OpenClaw | AppType::Hermes => return None,
+        };
+
+        candidates.iter().find_map(|path| {
+            settings
+                .pointer(path)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|key| !key.is_empty())
+        })
+    }
+
+    fn provider_points_to_ai302(app_type: &AppType, settings: &Value) -> bool {
+        let base_url = match app_type {
+            AppType::Claude | AppType::ClaudeDesktop => settings
+                .pointer("/env/ANTHROPIC_BASE_URL")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            AppType::Codex => settings
+                .get("config")
+                .and_then(Value::as_str)
+                .and_then(crate::codex_config::extract_codex_base_url),
+            AppType::Gemini => settings
+                .pointer("/env/GOOGLE_GEMINI_BASE_URL")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            AppType::OpenCode | AppType::OpenClaw | AppType::Hermes => None,
+        };
+
+        base_url
+            .and_then(|base_url| url::Url::parse(base_url.trim()).ok())
+            .and_then(|url| url.host_str().map(str::to_owned))
+            .is_some_and(|host| host == "api.302.ai" || host == "api.302ai.cn")
+    }
+
+    fn set_ai302_api_key(
+        app_type: &AppType,
+        provider: &mut Provider,
+        api_key: &str,
+    ) -> Result<(), AppError> {
+        let (section_name, field_name) = match app_type {
+            AppType::Claude => ("env", "ANTHROPIC_API_KEY"),
+            AppType::ClaudeDesktop => ("env", "ANTHROPIC_AUTH_TOKEN"),
+            AppType::Codex => ("auth", "OPENAI_API_KEY"),
+            AppType::Gemini => ("env", "GEMINI_API_KEY"),
+            AppType::OpenCode | AppType::OpenClaw | AppType::Hermes => {
+                return Err(AppError::Message(format!(
+                    "{} has no exclusive 302.AI provider",
+                    app_type.as_str()
+                )));
+            }
+        };
+
+        let settings = provider.settings_config.as_object_mut().ok_or_else(|| {
+            AppError::Message(format!(
+                "Invalid built-in domestic 302.AI settings for {}",
+                app_type.as_str()
+            ))
+        })?;
+        let section = settings
+            .get_mut(section_name)
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                AppError::Message(format!(
+                    "Invalid built-in domestic 302.AI {section_name} settings for {}",
+                    app_type.as_str()
+                ))
+            })?;
+        section.insert(field_name.to_string(), Value::String(api_key.to_string()));
+        Ok(())
+    }
+
+    /// Remove the legacy auto-imported `default` card from exclusive-mode apps
+    /// and make the domestic 302.AI seed the initial selection. A genuine user
+    /// selection is never replaced. If the legacy card already points at a
+    /// 302.AI endpoint, its key is moved to the domestic seed before deletion.
+    pub fn migrate_default_to_ai302_domestic(
+        state: &AppState,
+        app_type: AppType,
+    ) -> Result<bool, AppError> {
+        const LEGACY_DEFAULT_ID: &str = "default";
+
+        let domestic_provider_id =
+            Self::domestic_ai302_provider_id(&app_type).ok_or_else(|| {
+                AppError::Message(format!(
+                    "{} does not use an exclusive 302.AI provider",
+                    app_type.as_str()
+                ))
+            })?;
+        let current_id = crate::settings::get_effective_current_provider(&state.db, &app_type)?;
+        let legacy_default = state
+            .db
+            .get_provider_by_id(LEGACY_DEFAULT_ID, app_type.as_str())?;
+        let mut domestic = state
+            .db
+            .get_provider_by_id(domestic_provider_id, app_type.as_str())?
+            .ok_or_else(|| {
+                AppError::Message(format!(
+                    "Missing built-in domestic 302.AI provider for {}",
+                    app_type.as_str()
+                ))
+            })?;
+        let mut changed = false;
+
+        if let Some(legacy) = legacy_default.as_ref() {
+            let legacy_key =
+                Self::ai302_api_key(&app_type, &legacy.settings_config).map(str::to_string);
+            if Self::provider_points_to_ai302(&app_type, &legacy.settings_config)
+                && Self::ai302_api_key(&app_type, &domestic.settings_config).is_none()
+            {
+                if let Some(legacy_key) = legacy_key.as_deref() {
+                    Self::set_ai302_api_key(&app_type, &mut domestic, legacy_key)?;
+                    state.db.save_provider(app_type.as_str(), &domestic)?;
+                    changed = true;
+                }
+            }
+        }
+
+        if current_id
+            .as_deref()
+            .is_none_or(|id| id == LEGACY_DEFAULT_ID)
+        {
+            // Claude Desktop cannot materialize a 3P profile until a non-empty
+            // key exists. Keep its UI/DB selection on the domestic card and let
+            // the current-provider update path write the profile when the user
+            // saves a key. Other clients accept their empty-key first-run
+            // templates, so use the normal switch path and keep live/current
+            // ordering atomic.
+            if matches!(app_type, AppType::ClaudeDesktop)
+                && Self::ai302_api_key(&app_type, &domestic.settings_config).is_none()
+            {
+                crate::settings::set_current_provider(&app_type, Some(domestic_provider_id))?;
+                state
+                    .db
+                    .set_current_provider(app_type.as_str(), domestic_provider_id)?;
+            } else {
+                Self::switch(state, app_type.clone(), domestic_provider_id)?;
+            }
+            changed = true;
+        }
+
+        if legacy_default.is_some() {
+            state
+                .db
+                .delete_provider(app_type.as_str(), LEGACY_DEFAULT_ID)?;
+            changed = true;
+        }
+
+        Ok(changed)
+    }
+
+    /// Compatibility wrapper for older call sites and focused Codex tests.
+    pub fn migrate_codex_default_to_ai302_domestic(state: &AppState) -> Result<bool, AppError> {
+        Self::migrate_default_to_ai302_domestic(state, AppType::Codex)
+    }
+
     pub fn sync_current_provider_for_app(
         state: &AppState,
         app_type: AppType,

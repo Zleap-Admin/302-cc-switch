@@ -2,8 +2,8 @@
 //!
 //! 启动时调用 `Database::init_default_official_providers` /
 //! `Database::init_ai302_providers` 把这些条目写入 `providers` 表，让所有用户
-//! 开箱即看到「官方 + 302.AI 海外 + 302.AI 国内」默认供应商
-//! （两个 302.AI 节点都没有 key 占位，需用户补填）。
+//! 开箱即看到 302.AI 供应商。独占模式应用提供海外、国内双节点；
+//! 累加模式应用提供国内节点卡片。所有 302.AI 种子都没有 key，需用户补填。
 //!
 //! 字段与前端预设保持一致，参见：
 //! - `src/config/claudeProviderPresets.ts`（"Claude Official" / "302.AI"）
@@ -92,8 +92,8 @@ pub(crate) const OFFICIAL_SEEDS: &[BuiltinProviderSeed] = &[
 
 /// 302.AI 国内 / 海外聚合层种子（无 key 占位）。
 ///
-/// 只覆盖 4 个非 additive app（additive 的 opencode/openclaw/hermes 走 live 同步，
-/// 不走启动种子）。海外卡沿用对应前端预设的配置形态，国内卡只替换节点域名；
+/// 4 个独占模式应用保留国内、海外双卡；OpenCode、OpenClaw、Hermes
+/// 各补一张国内卡，但不自动写入它们的 live 配置，用户填 key 后再点“添加”。
 /// Claude Desktop 与前端保存后的 env 形态一致（直连模式，空 key）。
 ///
 /// ⚠️ key 字段为空，仅为占位；用户需编辑补填真实 302 API Key 后再切换。
@@ -132,12 +132,11 @@ pub(crate) const AI302_SEEDS: &[BuiltinProviderSeed] = &[
         icon_color: "#7C3AED",
         category: "aggregator",
         // config.toml 等价于前端 generateThirdPartyConfig("302ai",
-        // "https://api.302.ai/codex/v1") 的输出；/codex/v1 是 302 的 Codex 专用
-        // 原生 Responses 端点，直连透传（api_format="openai_responses"），
-        // 不再走本地 Responses→Chat 转换。
+        // "https://api.302.ai/v1") 的输出；海外、国内节点都直接使用 /v1
+        // 原生 Responses 端点（api_format="openai_responses"），不走本地转换。
         // 不写 model 行 = 自动路由：跟随 Codex 客户端按任务自选模型（sol / mini 等），
         // 302 按实际收到的模型 id 计费。钉死 gpt-5.5 会和真实调用对不上。
-        settings_config_json: r#"{"auth":{"OPENAI_API_KEY":""},"config":"model_provider = \"custom\"\nmodel_reasoning_effort = \"high\"\ndisable_response_storage = true\n\n[model_providers.custom]\nname = \"302ai\"\nbase_url = \"https://api.302.ai/codex/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true"}"#,
+        settings_config_json: r#"{"auth":{"OPENAI_API_KEY":""},"config":"model_provider = \"custom\"\nmodel_reasoning_effort = \"high\"\ndisable_response_storage = true\n\n[model_providers.custom]\nname = \"302ai\"\nbase_url = \"https://api.302.ai/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = false"}"#,
         api_format: Some("openai_responses"),
     },
     BuiltinProviderSeed {
@@ -149,7 +148,7 @@ pub(crate) const AI302_SEEDS: &[BuiltinProviderSeed] = &[
         icon_color: "#7C3AED",
         category: "aggregator",
         // 与其他中转商的 Gemini 原生透传写法一致：根域名 + 模型名
-        settings_config_json: r#"{"env":{"GOOGLE_GEMINI_BASE_URL":"https://api.302.ai","GEMINI_MODEL":"gemini-3.5-flash"},"config":{}}"#,
+        settings_config_json: r#"{"env":{"GOOGLE_GEMINI_BASE_URL":"https://api.302.ai","GEMINI_API_KEY":"","GEMINI_MODEL":"gemini-3.5-flash"},"config":{}}"#,
         api_format: None,
     },
     BuiltinProviderSeed {
@@ -182,7 +181,7 @@ pub(crate) const AI302_SEEDS: &[BuiltinProviderSeed] = &[
         icon: "ai302",
         icon_color: "#7C3AED",
         category: "aggregator",
-        settings_config_json: r#"{"auth":{"OPENAI_API_KEY":""},"config":"model_provider = \"custom\"\nmodel_reasoning_effort = \"high\"\ndisable_response_storage = true\n\n[model_providers.custom]\nname = \"302ai-cn\"\nbase_url = \"https://api.302ai.cn/codex/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true"}"#,
+        settings_config_json: r#"{"auth":{"OPENAI_API_KEY":""},"config":"model_provider = \"custom\"\nmodel_reasoning_effort = \"high\"\ndisable_response_storage = true\n\n[model_providers.custom]\nname = \"302ai-cn\"\nbase_url = \"https://api.302ai.cn/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = false"}"#,
         api_format: Some("openai_responses"),
     },
     BuiltinProviderSeed {
@@ -193,7 +192,40 @@ pub(crate) const AI302_SEEDS: &[BuiltinProviderSeed] = &[
         icon: "ai302",
         icon_color: "#7C3AED",
         category: "aggregator",
-        settings_config_json: r#"{"env":{"GOOGLE_GEMINI_BASE_URL":"https://api.302ai.cn","GEMINI_MODEL":"gemini-3.5-flash"},"config":{}}"#,
+        settings_config_json: r#"{"env":{"GOOGLE_GEMINI_BASE_URL":"https://api.302ai.cn","GEMINI_API_KEY":"","GEMINI_MODEL":"gemini-3.5-flash"},"config":{}}"#,
+        api_format: None,
+    },
+    BuiltinProviderSeed {
+        id: "ai302-cn-opencode",
+        app_type: AppType::OpenCode,
+        name: "302.AI（国内）",
+        website_url: "https://api.302ai.cn",
+        icon: "ai302",
+        icon_color: "#7C3AED",
+        category: "aggregator",
+        settings_config_json: r#"{"npm":"@ai-sdk/anthropic","name":"302.AI","options":{"baseURL":"https://api.302ai.cn/v1","apiKey":"","setCacheKey":true},"models":{"claude-opus-4-8":{"name":"Claude Opus 4.8"},"claude-sonnet-5":{"name":"Claude Sonnet 5"}}}"#,
+        api_format: None,
+    },
+    BuiltinProviderSeed {
+        id: "ai302-cn-openclaw",
+        app_type: AppType::OpenClaw,
+        name: "302.AI（国内）",
+        website_url: "https://api.302ai.cn",
+        icon: "ai302",
+        icon_color: "#7C3AED",
+        category: "aggregator",
+        settings_config_json: r#"{"baseUrl":"https://api.302ai.cn","apiKey":"","api":"anthropic-messages","models":[{"id":"claude-opus-4-8","name":"Claude Opus 4.8","contextWindow":200000},{"id":"claude-sonnet-5","name":"Claude Sonnet 5","contextWindow":200000}]}"#,
+        api_format: None,
+    },
+    BuiltinProviderSeed {
+        id: "ai302-cn-hermes",
+        app_type: AppType::Hermes,
+        name: "302.AI（国内）",
+        website_url: "https://api.302ai.cn",
+        icon: "ai302",
+        icon_color: "#7C3AED",
+        category: "aggregator",
+        settings_config_json: r#"{"name":"302ai","base_url":"https://api.302ai.cn/v1","api_key":"","api_mode":"chat_completions","models":[{"id":"gpt-5.5","name":"GPT-5.5"},{"id":"claude-sonnet-5","name":"Claude Sonnet 5"}]}"#,
         api_format: None,
     },
 ];
@@ -228,11 +260,11 @@ mod tests {
         assert!(is_builtin_seed_id(CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID));
     }
 
-    /// 302 种子覆盖 4 个非 additive app，且每个 app 恰好有国内、海外两条。
+    /// 4 个独占模式应用各有国内、海外两条；3 个累加模式应用至少有一条国内卡。
     #[test]
-    fn ai302_seeds_cover_four_non_additive_apps() {
+    fn ai302_seeds_cover_all_apps() {
         let app_types: Vec<AppType> = AI302_SEEDS.iter().map(|s| s.app_type.clone()).collect();
-        assert_eq!(AI302_SEEDS.len(), 8, "exactly 8 regional ai302 seeds");
+        assert_eq!(AI302_SEEDS.len(), 11, "all apps should have 302.AI seeds");
         for app_type in [
             AppType::Claude,
             AppType::ClaudeDesktop,
@@ -248,8 +280,16 @@ mod tests {
                 "{app_type:?} should have domestic and overseas seeds"
             );
         }
-        // 不应误种 additive app
-        assert!(!app_types.contains(&AppType::OpenCode));
+        for app_type in [AppType::OpenCode, AppType::OpenClaw, AppType::Hermes] {
+            assert_eq!(
+                app_types
+                    .iter()
+                    .filter(|candidate| **candidate == app_type)
+                    .count(),
+                1,
+                "{app_type:?} should have a domestic 302.AI seed"
+            );
+        }
     }
 
     #[test]
@@ -317,7 +357,9 @@ mod tests {
             .expect("codex json");
         let toml = config["config"].as_str().expect("codex config string");
         assert!(toml.contains("wire_api = \"responses\""));
-        assert!(toml.contains("base_url = \"https://api.302.ai/codex/v1\""));
+        assert!(toml.contains("requires_openai_auth = false"));
+        assert!(toml.contains("base_url = \"https://api.302.ai/v1\""));
+        assert!(!toml.contains("/codex/"));
         // 自动路由：种子不得钉死 model，Codex 客户端按任务自选
         assert!(!toml.contains("\nmodel = "));
         assert!(!toml.starts_with("model = "));
@@ -335,7 +377,9 @@ mod tests {
         let domestic_toml = domestic_config["config"]
             .as_str()
             .expect("domestic codex config string");
-        assert!(domestic_toml.contains("base_url = \"https://api.302ai.cn/codex/v1\""));
+        assert!(domestic_toml.contains("base_url = \"https://api.302ai.cn/v1\""));
+        assert!(domestic_toml.contains("requires_openai_auth = false"));
+        assert!(!domestic_toml.contains("/codex/"));
         assert_eq!(domestic_codex.api_format, Some("openai_responses"));
 
         let desktop = AI302_SEEDS
@@ -350,5 +394,15 @@ mod tests {
             Some("")
         );
         assert!(desktop_config["env"].get("ANTHROPIC_API_KEY").is_none());
+
+        for id in ["ai302-gemini", "ai302-cn-gemini"] {
+            let gemini = AI302_SEEDS
+                .iter()
+                .find(|seed| seed.id == id)
+                .expect("Gemini 302.AI seed");
+            let config = serde_json::from_str::<serde_json::Value>(gemini.settings_config_json)
+                .expect("Gemini seed JSON");
+            assert_eq!(config["env"]["GEMINI_API_KEY"].as_str(), Some(""));
+        }
     }
 }
